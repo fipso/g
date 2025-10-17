@@ -15,14 +15,10 @@
 //go:build !false
 // +build !false
 
-package kvm
+package boot
 
-// Config sets configuration options for each platform instance.
-type Config struct {
-	// ApplicationCores is the same parameter passed into
-	// kernel.InitKernelArgs. It is necessary to forward it to KVM in order
-	// to initialize the correct amount of vCPUs.
-	ApplicationCores int
-}
+type LoaderExtra struct{}
 
-func (*machine) applyConfig(config *Config) error { return nil }
+type ArgsExtra struct{}
+
+func setLoaderFromArgsExtra(l *Loader, args *Args) {}

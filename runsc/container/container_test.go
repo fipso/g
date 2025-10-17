@@ -15,6 +15,7 @@
 package container
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -1063,7 +1064,7 @@ func testCheckpointRestore(t *testing.T, conf *config.Config, compression statef
 	}
 
 	// Checkpoint running container; save state into new file.
-	if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Compression: compression}); err != nil {
+	if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Compression: compression}); err != nil {
 		t.Fatalf("error checkpointing container to empty file: %v", err)
 	}
 
@@ -1267,7 +1268,7 @@ func TestCheckpointRestoreExecKilled(t *testing.T) {
 	}
 
 	// Checkpoint running container.
-	if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelFlateBestSpeed}); err != nil {
+	if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelFlateBestSpeed}); err != nil {
 		t.Fatalf("error checkpointing container: %v", err)
 	}
 	cont.Destroy()
@@ -1346,7 +1347,7 @@ func TestCheckpointRestoreCreateMountPoint(t *testing.T) {
 	}
 
 	// Checkpoint running container; save state into new file.
-	if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelDefault}); err != nil {
+	if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelDefault}); err != nil {
 		t.Fatalf("error checkpointing container to file: %v", err)
 	}
 
@@ -1445,7 +1446,7 @@ func TestUnixDomainSockets(t *testing.T) {
 			}
 
 			// Checkpoint running container; save state into new file.
-			if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelDefault}); err != nil {
+			if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelDefault}); err != nil {
 				t.Fatalf("error checkpointing container to empty file: %v", err)
 			}
 
@@ -2829,7 +2830,7 @@ func TestUsageFD(t *testing.T) {
 	}
 
 	// Checkpoint running container.
-	if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelDefault}); err != nil {
+	if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelDefault}); err != nil {
 		t.Fatalf("error checkpointing container: %v", err)
 	}
 	cont.Destroy()
@@ -3963,7 +3964,7 @@ func TestSpecValidation(t *testing.T) {
 				t.Fatalf("error chmoding file: %q, %v", dir, err)
 			}
 			// Checkpoint running container; save state into new file.
-			if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelFlateBestSpeed}); err != nil {
+			if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Compression: statefile.CompressionLevelFlateBestSpeed}); err != nil {
 				t.Fatalf("error checkpointing container to empty file: %v", err)
 			}
 
@@ -4047,24 +4048,96 @@ func TestTarRootfsUpperLayer(t *testing.T) {
 	}
 
 	// Create a temporary file to write the tar bytes to.
-	tarFile, err := os.CreateTemp(testutil.TmpDir(), "tarfile-*.tar")
+	tarFile1, err := os.CreateTemp(testutil.TmpDir(), "tarfile-*.tar")
 	if err != nil {
 		t.Fatalf("error creating temp file: %v", err)
 	}
-	defer os.Remove(tarFile.Name())
+	defer os.Remove(tarFile1.Name())
 
-	if err := cont.Sandbox.TarRootfsUpperLayer(tarFile); err != nil {
+	if err := cont.Sandbox.TarRootfsUpperLayer(tarFile1); err != nil {
 		t.Fatalf("error serializing rootfs upper layer to tar: %v", err)
 	}
-	tarFile.Close()
+	tarFile1.Close()
 
 	// List the contents of the tar file using the tar command.
-	cmd := exec.Command("tar", "-tvf", tarFile.Name())
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("error listing contents of tar file: %v, output: %s", err, out)
+	snap1, err := exec.Command("tar", "-tvf", tarFile1.Name()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("error listing contents of tar file: %v, output: %s", err, snap1)
 	} else {
-		t.Logf("contents of tar file: %s", out)
+		t.Logf("contents of tar file: %s", snap1)
 	}
+	lineCounts := make(map[string]int)
+	if err := processSnapBytes(snap1, lineCounts, 1); err != nil {
+		t.Fatalf("error processing tar file: %v", err)
+	}
+	if len(lineCounts) <= 1 {
+		t.Fatalf("unexpected number of lines in tar file: %d", len(lineCounts))
+	}
+
+	// Add the tar file to the spec annotations and create a new container.
+	spec.Annotations["dev.gvisor.tar.rootfs.upper"] = tarFile1.Name()
+	_, bundleDir, cleanup, err = testutil.SetupContainer(spec, conf)
+	if err != nil {
+		t.Fatalf("error setting up container: %v", err)
+	}
+	defer cleanup()
+
+	args = Args{
+		ID:        testutil.RandomContainerID(),
+		Spec:      spec,
+		BundleDir: bundleDir,
+	}
+
+	newCont, err := New(conf, args)
+	if err != nil {
+		t.Fatalf("error creating container: %v", err)
+	}
+	defer newCont.Destroy()
+	if err := newCont.Start(conf); err != nil {
+		t.Fatalf("error starting container: %v", err)
+	}
+
+	// Create a new temporary file to write the tar bytes to.
+	tarFile2, err := os.CreateTemp(testutil.TmpDir(), "tarfile-*.tar")
+	if err != nil {
+		t.Fatalf("error creating temp file: %v", err)
+	}
+	defer os.Remove(tarFile2.Name())
+
+	if err := newCont.Sandbox.TarRootfsUpperLayer(tarFile2); err != nil {
+		t.Fatalf("error serializing rootfs upper layer to tar: %v", err)
+	}
+	tarFile2.Close()
+
+	// List the contents of the tar file using the tar command.
+	snap2, err := exec.Command("tar", "-tvf", tarFile2.Name()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("error listing contents of tar file: %v, output: %s", err, snap2)
+	}
+
+	// Check that the tar file contains the same contents as the original tar file.
+	if err := processSnapBytes(snap2, lineCounts, -1); err != nil {
+		t.Fatalf("error processing tar file: %v", err)
+	}
+	for line, count := range lineCounts {
+		if count != 0 {
+			t.Errorf("unexpected diff in tar file: line %q has %d occurrences", line, count)
+		}
+	}
+}
+
+func processSnapBytes(data []byte, lineCounts map[string]int, increment int) error {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		lineCounts[line] += increment
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func TestSpecValidationIgnore(t *testing.T) {
@@ -4175,7 +4248,7 @@ func TestCheckpointResume(t *testing.T) {
 			}
 
 			// Checkpoint running container; save state into new file.
-			if err := cont.Checkpoint(dir, sandbox.CheckpointOpts{Resume: true}); err != nil {
+			if err := cont.Checkpoint(conf, dir, sandbox.CheckpointOpts{Resume: true}); err != nil {
 				t.Fatalf("error checkpointing container to empty file: %v", err)
 			}
 

@@ -152,6 +152,14 @@ type containerInfo struct {
 
 	// nvidiaUVMDevMajor is the device major number used for nvidia-uvm.
 	nvidiaUVMDevMajor uint32
+
+	// applicationCores is the number of CPU cores gVisor reports to user
+	// applications.
+	applicationCores int
+
+	// rootfsUpperTarFD is the file descriptor to the tar file containing the rootfs
+	// upper layer changes.
+	rootfsUpperTarFD *fd.FD
 }
 
 type loaderState int
@@ -274,6 +282,8 @@ type Loader struct {
 	// saveRestoreNet indicates if the saved network stack should be used
 	// during restore.
 	saveRestoreNet bool
+
+	LoaderExtra
 }
 
 // execID uniquely identifies a sentry process that is executed in a container.
@@ -377,6 +387,12 @@ type Args struct {
 	HostTHP HostTHP
 
 	SaveFDs []*fd.FD
+
+	ArgsExtra
+
+	// RootfsUpperTarFD is the file descriptor to the tar file containing the rootfs
+	// upper layer changes.
+	RootfsUpperTarFD int
 }
 
 // HostTHP holds host transparent hugepage settings.
@@ -467,14 +483,22 @@ func New(args Args) (*Loader, error) {
 		containerSpecs: make(map[string]*specs.Spec),
 		saveFDs:        args.SaveFDs,
 	}
+	setLoaderFromArgsExtra(l, &args)
+
+	if args.NumCPU == 0 {
+		args.NumCPU = runtime.NumCPU()
+	}
+	log.Infof("CPUs: %d", args.NumCPU)
+	gomaxprocs.SetBase(args.NumCPU)
 
 	containerName := l.registerContainer(args.Spec, args.ID)
 	l.root = containerInfo{
-		cid:             args.ID,
-		containerName:   containerName,
-		conf:            args.Conf,
-		spec:            args.Spec,
-		goferMountConfs: args.GoferMountConfs,
+		cid:              args.ID,
+		containerName:    containerName,
+		conf:             args.Conf,
+		spec:             args.Spec,
+		goferMountConfs:  args.GoferMountConfs,
+		applicationCores: args.NumCPU,
 	}
 
 	// Make host FDs stable between invocations. Host FDs must map to the exact
@@ -519,8 +543,12 @@ func New(args Args) (*Loader, error) {
 		})
 	}
 
+	if args.RootfsUpperTarFD >= 0 {
+		l.root.rootfsUpperTarFD = fd.New(args.RootfsUpperTarFD)
+	}
+
 	// Create kernel and platform.
-	p, err := createPlatform(args.Conf, args.Device)
+	p, err := createPlatform(args.Conf, args.NumCPU, args.Device)
 	if err != nil {
 		return nil, fmt.Errorf("creating platform: %w", err)
 	}
@@ -577,12 +605,6 @@ func New(args Args) (*Loader, error) {
 			return nil, fmt.Errorf("enable s/r: %w", err)
 		}
 	}
-
-	if args.NumCPU == 0 {
-		args.NumCPU = runtime.NumCPU()
-	}
-	log.Infof("CPUs: %d", args.NumCPU)
-	gomaxprocs.SetBase(args.NumCPU)
 
 	if args.TotalHostMem > 0 {
 		// As per tmpfs(5), the default size limit is 50% of total physical RAM.
@@ -668,7 +690,9 @@ func New(args Args) (*Loader, error) {
 
 	// Create a watchdog.
 	dogOpts := watchdog.DefaultOpts
-	dogOpts.TaskTimeoutAction = args.Conf.WatchdogAction
+	if err := dogOpts.TaskTimeoutAction.Set(args.Conf.WatchdogAction); err != nil {
+		return nil, fmt.Errorf("setting watchdog action: %w", err)
+	}
 	l.watchdog = watchdog.New(l.k, dogOpts)
 
 	procArgs, err := createProcessArgs(args.ID, args.Spec, args.Conf, creds, l.k, l.k.RootPIDNamespace())
@@ -828,7 +852,7 @@ func (l *Loader) Destroy() {
 	refs.OnExit()
 }
 
-func createPlatform(conf *config.Config, deviceFile *fd.FD) (platform.Platform, error) {
+func createPlatform(conf *config.Config, numCPU int, deviceFile *fd.FD) (platform.Platform, error) {
 	p, err := platform.Lookup(conf.Platform)
 	if err != nil {
 		panic(fmt.Sprintf("invalid platform %s: %s", conf.Platform, err))
@@ -837,6 +861,7 @@ func createPlatform(conf *config.Config, deviceFile *fd.FD) (platform.Platform, 
 	return p.New(platform.Options{
 		DeviceFile:             deviceFile,
 		DisableSyscallPatching: conf.Platform == "systrap" && conf.SystrapDisableSyscallPatching,
+		ApplicationCores:       numCPU,
 	})
 }
 
@@ -1082,7 +1107,7 @@ func (l *Loader) createSubcontainer(cid string, tty *fd.FD) error {
 // startSubcontainer starts a child container. It returns the thread group ID of
 // the newly created process. Used FDs are either closed or released. It's safe
 // for the caller to close any remaining files upon return.
-func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdioFDs, goferFDs, goferFilestoreFDs []*fd.FD, devGoferFD *fd.FD, goferMountConfs []GoferMountConf) error {
+func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdioFDs, goferFDs, goferFilestoreFDs []*fd.FD, devGoferFD *fd.FD, goferMountConfs []GoferMountConf, rootfsUpperTarFD *fd.FD) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -1131,6 +1156,7 @@ func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid st
 		goferFilestoreFDs: goferFilestoreFDs,
 		goferMountConfs:   goferMountConfs,
 		nvidiaUVMDevMajor: l.root.nvidiaUVMDevMajor,
+		rootfsUpperTarFD:  rootfsUpperTarFD,
 	}
 	var err error
 	info.procArgs, err = createProcessArgs(cid, spec, conf, creds, l.k, pidns)

@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !false
-// +build !false
+// Package checkpointfiles defines constants used when sentry state is
+// checkpointed to multiple files in a directory rather than to an opaque FD.
+package checkpointfiles
 
-package kvm
+const (
+	// StateFileName is the file in an image-path directory which contains the
+	// sentry object graph.
+	StateFileName = "checkpoint.img"
 
-// Config sets configuration options for each platform instance.
-type Config struct {
-	// ApplicationCores is the same parameter passed into
-	// kernel.InitKernelArgs. It is necessary to forward it to KVM in order
-	// to initialize the correct amount of vCPUs.
-	ApplicationCores int
-}
+	// PagesMetadataFileName is the file in an image-path directory containing
+	// MemoryFile metadata.
+	PagesMetadataFileName = "pages_meta.img"
 
-func (*machine) applyConfig(config *Config) error { return nil }
+	// PagesFileName is the file in an image-path directory containing
+	// MemoryFile page contents.
+	PagesFileName = "pages.img"
+)

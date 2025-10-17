@@ -50,6 +50,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/erofs"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
 	"gvisor.dev/gvisor/pkg/sentry/seccheck"
+	"gvisor.dev/gvisor/pkg/sentry/state/checkpointfiles"
 	"gvisor.dev/gvisor/pkg/state/statefile"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/urpc"
@@ -464,10 +465,21 @@ func (s *Sandbox) StartSubcontainer(spec *specs.Spec, conf *config.Config, cid s
 	}
 	s.fixPidns(spec)
 
+	var rootfsUpperTarFile *os.File
+	if path := specutils.RootfsTarUpperPath(spec); path != "" {
+		var err error
+		rootfsUpperTarFile, err = os.OpenFile(path, os.O_RDONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("opening rootfs upper tar file: %v", err)
+		}
+	}
+	defer rootfsUpperTarFile.Close()
+
 	// The payload contains (in this specific order):
 	// * stdin/stdout/stderr (optional: only present when not using TTY)
 	// * The subcontainer's gofer filestore files (optional)
 	// * The subcontainer's dev gofer file (optional)
+	// * The TAR file that contains the upper layer changes of the overlay rootfs.
 	// * Gofer files.
 	payload := urpc.FilePayload{}
 	payload.Files = append(payload.Files, stdios...)
@@ -475,17 +487,21 @@ func (s *Sandbox) StartSubcontainer(spec *specs.Spec, conf *config.Config, cid s
 	if devIOFile != nil {
 		payload.Files = append(payload.Files, devIOFile)
 	}
+	if rootfsUpperTarFile != nil {
+		payload.Files = append(payload.Files, rootfsUpperTarFile)
+	}
 	payload.Files = append(payload.Files, goferFiles...)
 
 	// Start running the container.
 	args := boot.StartArgs{
-		Spec:                 spec,
-		Conf:                 conf,
-		CID:                  cid,
-		NumGoferFilestoreFDs: len(goferFilestores),
-		IsDevIoFilePresent:   devIOFile != nil,
-		GoferMountConfs:      goferConfs,
-		FilePayload:          payload,
+		Spec:                        spec,
+		Conf:                        conf,
+		CID:                         cid,
+		NumGoferFilestoreFDs:        len(goferFilestores),
+		IsDevIoFilePresent:          devIOFile != nil,
+		GoferMountConfs:             goferConfs,
+		IsRootfsUpperTarFilePresent: rootfsUpperTarFile != nil,
+		FilePayload:                 payload,
 	}
 	if err := s.call(boot.ContMgrStartSubcontainer, &args, nil); err != nil {
 		return fmt.Errorf("starting sub-container %v: %w", spec.Process.Args, err)
@@ -501,44 +517,16 @@ func (s *Sandbox) Restore(conf *config.Config, spec *specs.Spec, cid string, ima
 
 	log.Debugf("Restore sandbox %q from path %q", s.ID, imagePath)
 
-	stateFileName := path.Join(imagePath, boot.CheckpointStateFileName)
-	sf, err := os.Open(stateFileName)
-	if err != nil {
-		return fmt.Errorf("opening state file %q failed: %v", stateFileName, err)
-	}
-	defer sf.Close()
-
 	opt := boot.RestoreOpts{
-		FilePayload: urpc.FilePayload{
-			Files: []*os.File{sf},
-		},
 		Background: background,
 	}
-
-	// If the pages file exists, we must pass it in.
-	pagesFileName := path.Join(imagePath, boot.CheckpointPagesFileName)
-	pagesReadFlags := os.O_RDONLY
-	if direct {
-		// The contents are page-aligned, so it can be opened with O_DIRECT.
-		pagesReadFlags |= syscall.O_DIRECT
-	}
-	if pf, err := os.OpenFile(pagesFileName, pagesReadFlags, 0); err == nil {
-		defer pf.Close()
-		pagesMetadataFileName := path.Join(imagePath, boot.CheckpointPagesMetadataFileName)
-		pmf, err := os.Open(pagesMetadataFileName)
-		if err != nil {
-			return fmt.Errorf("opening restore image file %q failed: %v", pagesMetadataFileName, err)
+	defer func() {
+		for _, f := range opt.FilePayload.Files {
+			_ = f.Close()
 		}
-		defer pmf.Close()
-
-		opt.HavePagesFile = true
-		opt.FilePayload.Files = append(opt.FilePayload.Files, pmf, pf)
-		log.Infof("Found page files for sandbox %q. Page metadata: %q, pages: %q", s.ID, pagesMetadataFileName, pagesFileName)
-
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("opening restore pages file %q failed: %v", pagesFileName, err)
-	} else {
-		log.Infof("Using single checkpoint file for sandbox %q", s.ID)
+	}()
+	if err := s.setRestoreOptsImpl(conf, imagePath, direct, &opt); err != nil {
+		return err
 	}
 
 	// If the platform needs a device FD we must pass it in.
@@ -571,6 +559,39 @@ func (s *Sandbox) Restore(conf *config.Config, spec *specs.Spec, cid string, ima
 		return fmt.Errorf("restoring container %q: %v", cid, err)
 	}
 	s.Restored = true
+	return nil
+}
+
+func (s *Sandbox) setRestoreOptsForLocalCheckpointFiles(conf *config.Config, imagePath string, direct bool, opt *boot.RestoreOpts) error {
+	stateFileName := path.Join(imagePath, checkpointfiles.StateFileName)
+	sf, err := os.Open(stateFileName)
+	if err != nil {
+		return fmt.Errorf("opening state file %q failed: %w", stateFileName, err)
+	}
+	opt.FilePayload.Files = append(opt.FilePayload.Files, sf)
+
+	// If either the pages metadata file or pages file exist, both must exist,
+	// and we must pass them in.
+	pagesMetadataFileName := path.Join(imagePath, checkpointfiles.PagesMetadataFileName)
+	if pmf, err := os.Open(pagesMetadataFileName); err == nil {
+		opt.FilePayload.Files = append(opt.FilePayload.Files, pmf)
+		pagesFileName := path.Join(imagePath, checkpointfiles.PagesFileName)
+		pagesReadFlags := os.O_RDONLY
+		if direct {
+			// The contents are page-aligned, so it can be opened with O_DIRECT.
+			pagesReadFlags |= syscall.O_DIRECT
+		}
+		pf, err := os.OpenFile(pagesFileName, pagesReadFlags, 0)
+		if err != nil {
+			return fmt.Errorf("opening pages file %q failed: %w", pagesFileName, err)
+		}
+		opt.FilePayload.Files = append(opt.FilePayload.Files, pf)
+		opt.HavePagesFile = true
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("opening pages metadata file %q failed: %w", pagesMetadataFileName, err)
+	} else {
+		log.Infof("Using single checkpoint file for sandbox %q", s.ID)
+	}
 	return nil
 }
 
@@ -930,6 +951,9 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 	if err := donations.OpenAndDonate("final-metrics-log-fd", conf.FinalMetricsLog, profFlags); err != nil {
 		return fmt.Errorf("donating final metrics log file: %w", err)
 	}
+	if err := donations.OpenAndDonate("rootfs-upper-tar-fd", specutils.RootfsTarUpperPath(args.Spec), os.O_RDONLY); err != nil {
+		return fmt.Errorf("donating rootfs tar file: %w", err)
+	}
 
 	// Pass gofer mount configs.
 	cmd.Args = append(cmd.Args, "--gofer-mount-confs="+args.GoferMountConfs.String())
@@ -962,7 +986,7 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 		donations.DonateAndClose("save-fds", files...)
 	}
 
-	if err := createSandboxProcessExtra(conf, args, &donations); err != nil {
+	if err := createSandboxProcessExtra(conf, args, cmd, &donations); err != nil {
 		return err
 	}
 
@@ -1496,32 +1520,26 @@ type CheckpointOpts struct {
 
 // Checkpoint sends the checkpoint call for a container in the sandbox.
 // The statefile will be written to f.
-func (s *Sandbox) Checkpoint(cid string, imagePath string, opts CheckpointOpts) error {
+func (s *Sandbox) Checkpoint(conf *config.Config, cid string, imagePath string, opts CheckpointOpts) error {
 	log.Debugf("Checkpoint sandbox %q, imagePath %q, opts %+v", s.ID, imagePath, opts)
-
-	files, err := createSaveFiles(imagePath, opts.Direct, opts.Compression)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		for _, f := range files {
-			_ = f.Close()
-		}
-	}()
 
 	opt := control.SaveOpts{
 		Metadata:                       opts.Compression.ToMetadata(),
 		AppMFExcludeCommittedZeroPages: opts.ExcludeCommittedZeroPages,
-		FilePayload: urpc.FilePayload{
-			Files: files,
-		},
-		HavePagesFile: len(files) > 1,
-		Resume:        opts.Resume,
+		Resume:                         opts.Resume,
 		ExecOpts: control.SaveRestoreExecOpts{
 			Argv:        opts.SaveRestoreExecArgv,
 			Timeout:     opts.SaveRestoreExecTimeout,
 			ContainerID: opts.SaveRestoreExecContainerID,
 		},
+	}
+	defer func() {
+		for _, f := range opt.FilePayload.Files {
+			_ = f.Close()
+		}
+	}()
+	if err := setCheckpointOptsImpl(conf, imagePath, opts, &opt); err != nil {
+		return err
 	}
 
 	if err := s.call(boot.ContMgrCheckpoint, &opt, nil); err != nil {
@@ -1531,13 +1549,23 @@ func (s *Sandbox) Checkpoint(cid string, imagePath string, opts CheckpointOpts) 
 	return nil
 }
 
+func setCheckpointOptsForLocalCheckpointFiles(conf *config.Config, imagePath string, opts CheckpointOpts, opt *control.SaveOpts) error {
+	files, err := createSaveFiles(imagePath, opts.Direct, opts.Compression)
+	if err != nil {
+		return err
+	}
+	opt.FilePayload.Files = files
+	opt.HavePagesFile = len(files) > 1
+	return nil
+}
+
 // createSaveFiles creates the files used by checkpoint to save the state. They are returned in
 // the following order: sentry state, page metadata, page file. This is the same order expected by
 // RPCs and argument passing to the sandbox.
 func createSaveFiles(path string, direct bool, compression statefile.CompressionLevel) ([]*os.File, error) {
 	var files []*os.File
 
-	stateFilePath := filepath.Join(path, boot.CheckpointStateFileName)
+	stateFilePath := filepath.Join(path, checkpointfiles.StateFileName)
 	f, err := os.OpenFile(stateFilePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("creating checkpoint state file %q: %w", stateFilePath, err)
@@ -1548,14 +1576,14 @@ func createSaveFiles(path string, direct bool, compression statefile.Compression
 	// It is beneficial to store them separately so certain optimizations can be
 	// applied during restore. See Restore().
 	if compression == statefile.CompressionLevelNone {
-		pagesMetadataFilePath := filepath.Join(path, boot.CheckpointPagesMetadataFileName)
+		pagesMetadataFilePath := filepath.Join(path, checkpointfiles.PagesMetadataFileName)
 		f, err = os.OpenFile(pagesMetadataFilePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 		if err != nil {
 			return nil, fmt.Errorf("creating checkpoint pages metadata file %q: %w", pagesMetadataFilePath, err)
 		}
 		files = append(files, f)
 
-		pagesFilePath := filepath.Join(path, boot.CheckpointPagesFileName)
+		pagesFilePath := filepath.Join(path, checkpointfiles.PagesFileName)
 		pagesWriteFlags := os.O_CREATE | os.O_EXCL | os.O_RDWR
 		if direct {
 			// The writes will be page-aligned, so it can be opened with O_DIRECT.
