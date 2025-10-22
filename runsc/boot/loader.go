@@ -58,6 +58,7 @@ import (
 	pb "gvisor.dev/gvisor/pkg/sentry/seccheck/points/points_go_proto"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netfilter"
 	"gvisor.dev/gvisor/pkg/sentry/socket/plugin"
+	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/time"
 	"gvisor.dev/gvisor/pkg/sentry/usage"
@@ -640,6 +641,11 @@ func New(args Args) (*Loader, error) {
 		cpufs = afs
 	}
 
+	// Check for UDS monitoring annotation
+	if socketPath, ok := args.Spec.Annotations[monitor.AnnotationUDSMonitor]; ok {
+		monitor.RegisterContainer(args.ID, socketPath)
+	}
+
 	maxFDLimit := kernel.MaxFdLimit
 	if args.Spec.Linux != nil && args.Spec.Linux.Sysctl != nil {
 		if val, ok := args.Spec.Linux.Sysctl["fs.nr_open"]; ok {
@@ -1146,6 +1152,12 @@ func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid st
 
 	containerName := l.registerContainerLocked(spec, cid)
 	l.k.RegisterContainerName(cid, containerName)
+
+	// Check for UDS monitoring annotation
+	if socketPath, ok := spec.Annotations[monitor.AnnotationUDSMonitor]; ok {
+		monitor.RegisterContainer(cid, socketPath)
+	}
+
 	info := &containerInfo{
 		cid:               cid,
 		containerName:     containerName,

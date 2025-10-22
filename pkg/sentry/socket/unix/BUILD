@@ -46,6 +46,7 @@ go_library(
         "//pkg/sentry/socket",
         "//pkg/sentry/socket/control",
         "//pkg/sentry/socket/netstack",
+        "//pkg/sentry/socket/unix/monitor",
         "//pkg/sentry/socket/unix/transport",
         "//pkg/sentry/vfs",
         "//pkg/syserr",

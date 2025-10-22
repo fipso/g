@@ -17,7 +17,6 @@
 package unix
 
 import (
-	"bytes"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -36,6 +35,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/socket"
 	"gvisor.dev/gvisor/pkg/sentry/socket/control"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netstack"
+	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/syserr"
@@ -443,6 +443,22 @@ func (s *Socket) Endpoint() transport.Endpoint {
 	return s.ep
 }
 
+// getSocketPath returns the socket path for monitoring purposes.
+// It tries to get the remote address for connected sockets, then falls back to local address.
+func (s *Socket) getSocketPath() string {
+	// Try remote address first (for connected sockets)
+	if addr, err := s.ep.GetRemoteAddress(); err == nil && addr.Addr != "" {
+		return addr.Addr
+	}
+
+	// Fall back to local address
+	if addr, err := s.ep.GetLocalAddress(); err == nil && addr.Addr != "" {
+		return addr.Addr
+	}
+
+	return ""
+}
+
 // extractPath extracts and validates the address.
 func extractPath(sockaddr []byte) (string, *syserr.Error) {
 	addr, family, err := AddressAndFamily(sockaddr)
@@ -599,6 +615,24 @@ func (s *Socket) Connect(t *kernel.Task, sockaddr []byte, blocking bool) *syserr
 // SendMsg implements the linux syscall sendmsg(2) for unix sockets backed by
 // a transport.Endpoint.
 func (s *Socket) SendMsg(t *kernel.Task, src usermem.IOSequence, to []byte, flags int, haveDeadline bool, deadline ktime.Time, controlMessages socket.ControlMessages) (int, *syserr.Error) {
+	// Monitor setup - capture data if monitoring is enabled
+	var monitorData []byte
+	containerID := t.ContainerID()
+	socketPath := s.getSocketPath()
+	shouldMonitor := monitor.ShouldMonitor(containerID, socketPath)
+
+	if shouldMonitor && src.NumBytes() > 0 {
+		// Capture data for monitoring
+		monitorData = make([]byte, src.NumBytes())
+		if _, err := src.CopyIn(t, monitorData); err == nil {
+			// Reset src to original position after reading
+			src = src.TakeFirst64(int64(len(monitorData)))
+		} else {
+			// Failed to capture, disable monitoring for this call
+			shouldMonitor = false
+		}
+	}
+
 	w := EndpointWriter{
 		Ctx:      t,
 		Endpoint: s.ep,
@@ -632,6 +666,12 @@ func (s *Socket) SendMsg(t *kernel.Task, src usermem.IOSequence, to []byte, flag
 	if w.Notify != nil {
 		w.Notify()
 	}
+
+	// Record monitoring data if enabled
+	if shouldMonitor && n > 0 {
+		monitor.RecordSend(containerID, socketPath, monitorData[:n])
+	}
+
 	if err != linuxerr.ErrWouldBlock || flags&linux.MSG_DONTWAIT != 0 {
 		return int(n), syserr.FromError(err)
 	}
@@ -710,6 +750,11 @@ func (s *Socket) Shutdown(t *kernel.Task, how int) *syserr.Error {
 // RecvMsg implements the linux syscall recvmsg(2) for sockets backed by
 // a transport.Endpoint.
 func (s *Socket) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags int, haveDeadline bool, deadline ktime.Time, senderRequested bool, controlDataLen uint64) (n int, msgFlags int, senderAddr linux.SockAddr, senderAddrLen uint32, controlMessages socket.ControlMessages, err *syserr.Error) {
+	// Monitor setup
+	containerID := t.ContainerID()
+	socketPath := s.getSocketPath()
+	shouldMonitor := monitor.ShouldMonitor(containerID, socketPath)
+
 	trunc := flags&linux.MSG_TRUNC != 0
 	peek := flags&linux.MSG_PEEK != 0
 	dontWait := flags&linux.MSG_DONTWAIT != 0
@@ -786,11 +831,16 @@ func (s *Socket) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags int, have
 
 		if err != nil || dontWait || !waitAll || isPacket || n >= dst.NumBytes() {
 			if isPacket && n < int64(r.MsgSize) {
-				msgFlags |= linux.MSG_TRUNC
+				msgFlags |= linux.MSG_CTRUNC
 			}
 
 			if trunc {
 				n = int64(r.MsgSize)
+			}
+
+			// Record recv monitoring
+			if shouldMonitor && n > 0 {
+				monitor.RecordRecv(containerID, socketPath, uint64(n))
 			}
 
 			return int(n), msgFlags, from, fromLen, socket.ControlMessages{Unix: r.Control}, syserr.FromError(err)
@@ -834,6 +884,12 @@ func (s *Socket) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags int, have
 				if isPacket && n < int64(r.MsgSize) {
 					msgFlags |= linux.MSG_TRUNC
 				}
+
+				// Record recv monitoring
+				if shouldMonitor && total > 0 {
+					monitor.RecordRecv(containerID, socketPath, uint64(total))
+				}
+
 				return int(total), msgFlags, from, fromLen, socket.ControlMessages{Unix: r.Control}, syserr.FromError(err)
 			}
 

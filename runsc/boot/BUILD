@@ -102,6 +102,7 @@ go_library(
         "//pkg/sentry/socket/netstack",
         "//pkg/sentry/socket/plugin",
         "//pkg/sentry/socket/unix",
+        "//pkg/sentry/socket/unix/monitor",
         "//pkg/sentry/socket/unix/transport",
         "//pkg/sentry/state",
         "//pkg/sentry/state/stateio",
