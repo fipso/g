@@ -24,6 +24,8 @@ import (
 	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/fdnotifier"
 	"gvisor.dev/gvisor/pkg/log"
+	"gvisor.dev/gvisor/pkg/sentry/kernel"
+	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/syserr"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -172,6 +174,30 @@ func (c *HostConnectedEndpoint) Send(ctx context.Context, data [][]byte, control
 		return 0, false, syserr.ErrClosedForSend
 	}
 
+	// Check if monitoring is enabled for this host FD
+	var shouldMonitor bool
+	var socketPath string
+	var containerID string
+	var monitorData []byte
+
+	t := kernel.TaskFromContext(ctx)
+	if t != nil {
+		containerID = t.ContainerID()
+		socketPath, shouldMonitor = monitor.ShouldMonitorHostFD(containerID, c.fd)
+
+		// If monitoring, flatten data vectors for capture (minimal overhead)
+		if shouldMonitor {
+			totalLen := 0
+			for _, d := range data {
+				totalLen += len(d)
+			}
+			monitorData = make([]byte, 0, totalLen)
+			for _, d := range data {
+				monitorData = append(monitorData, d...)
+			}
+		}
+	}
+
 	// Since stream sockets don't preserve message boundaries, we can write
 	// only as much of the message as fits in the send buffer.
 	truncate := c.stype == linux.SOCK_STREAM
@@ -187,6 +213,15 @@ func (c *HostConnectedEndpoint) Send(ctx context.Context, data [][]byte, control
 		// otherwise there isn't anything that can be done about an
 		// error with a partial write.
 		err = nil
+	}
+
+	// Record monitoring data after send completes
+	if shouldMonitor && n > 0 {
+		// Only capture what was actually sent
+		if int(n) < len(monitorData) {
+			monitorData = monitorData[:n]
+		}
+		monitor.RecordSend(containerID, socketPath, monitorData)
 	}
 
 	// There is no need for the callee to call SendNotify because fdWriteVec
@@ -281,6 +316,17 @@ func (c *HostConnectedEndpoint) Recv(ctx context.Context, data [][]byte, args Re
 	}
 	if err != nil {
 		return RecvOutput{}, false, syserr.FromError(err)
+	}
+
+	// Record monitoring data for receive (just track bytes, no data capture)
+	if out.RecvLen > 0 {
+		t := kernel.TaskFromContext(ctx)
+		if t != nil {
+			containerID := t.ContainerID()
+			if socketPath, shouldMonitor := monitor.ShouldMonitorHostFD(containerID, c.fd); shouldMonitor {
+				monitor.RecordRecv(containerID, socketPath, uint64(out.RecvLen))
+			}
+		}
 	}
 
 	// There is no need for the callee to call RecvNotify because fdReadVec uses
