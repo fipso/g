@@ -11,6 +11,12 @@
 
 **g** is a custom fork of Google's **gVisor** container sandbox
 
+New features:
+- `--uds-monitor=/path/to/host.sock` flag for `runsc`:
+    - Clones all container -> host uds traffic to a host uds socket:
+        - Data is wrapped in simple struct that contains direction and size
+    - Intended to be used with `--host-uds` on `all` or `open`
+
 **gVisor** provides a strong layer of isolation between running applications and
 the host operating system. It is an application kernel that implements a
 [Linux-like interface][linux]. Unlike Linux, it is written in a memory-safe
