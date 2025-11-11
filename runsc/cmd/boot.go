@@ -198,6 +198,9 @@ type Boot struct {
 
 	// rootfsUpperTarFD is the file descriptor to a tar file that has rootfs change at startup.
 	rootfsUpperTarFD int
+
+	// monitorFD is the file descriptor to the UDS monitor socket.
+	monitorFD int
 }
 
 // Name implements subcommands.Command.Name.
@@ -251,6 +254,7 @@ func (b *Boot) SetFlags(f *flag.FlagSet) {
 	f.Var(&b.sinkFDs, "sink-fds", "ordered list of file descriptors to be used by the sinks defined in --pod-init-config.")
 	f.Var(&b.saveFDs, "save-fds", "ordered list of file descriptors to be used save checkpoints. Order: kernel state, page metadata, page file")
 	f.IntVar(&b.rootfsUpperTarFD, "rootfs-upper-tar-fd", -1, "file descriptor to the tar file containing the rootfs upper layer changes.")
+	f.IntVar(&b.monitorFD, "monitor-fd", -1, "file descriptor to the UDS monitor socket.")
 
 	// Profiling flags.
 	b.profileFDs.SetFromFlags(f)
@@ -551,6 +555,7 @@ func (b *Boot) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomma
 		HostTHP:             b.hostTHP,
 		SaveFDs:             b.saveFDs.GetFDs(),
 		RootfsUpperTarFD:    b.rootfsUpperTarFD,
+		MonitorFD:           b.monitorFD,
 	}
 	b.setBootArgsExtra(&bootArgs)
 	l, err := boot.New(bootArgs)

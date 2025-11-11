@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -953,6 +954,36 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 	}
 	if err := donations.OpenAndDonate("rootfs-upper-tar-fd", specutils.RootfsTarUpperPath(args.Spec), os.O_RDONLY); err != nil {
 		return fmt.Errorf("donating rootfs tar file: %w", err)
+	}
+
+	// Connect to UDS monitor socket if configured
+	if conf.UDSMonitor != "" {
+		monitorConn, err := net.Dial("unix", conf.UDSMonitor)
+		if err != nil {
+			log.Warningf("Failed to connect to UDS monitor socket %q: %v", conf.UDSMonitor, err)
+		} else {
+			// Send handshake message with sandbox ID
+			handshake := fmt.Sprintf("CONTAINER_ID=%s\n", s.ID)
+			if _, err := monitorConn.Write([]byte(handshake)); err != nil {
+				log.Warningf("Failed to send handshake to monitor: %v", err)
+				monitorConn.Close()
+			} else {
+				// Convert net.Conn to *os.File
+				if unixConn, ok := monitorConn.(*net.UnixConn); ok {
+					if monitorFile, err := unixConn.File(); err == nil {
+						donations.DonateAndClose("monitor-fd", monitorFile)
+						// Close the original connection since we donated the file
+						monitorConn.Close()
+					} else {
+						log.Warningf("Failed to get file from monitor connection: %v", err)
+						monitorConn.Close()
+					}
+				} else {
+					log.Warningf("Monitor connection is not a UnixConn")
+					monitorConn.Close()
+				}
+			}
+		}
 	}
 
 	// Pass gofer mount configs.

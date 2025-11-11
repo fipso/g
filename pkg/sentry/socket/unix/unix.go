@@ -36,6 +36,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/socket"
 	"gvisor.dev/gvisor/pkg/sentry/socket/control"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netstack"
+	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/syserr"
@@ -599,6 +600,19 @@ func (s *Socket) Connect(t *kernel.Task, sockaddr []byte, blocking bool) *syserr
 // SendMsg implements the linux syscall sendmsg(2) for unix sockets backed by
 // a transport.Endpoint.
 func (s *Socket) SendMsg(t *kernel.Task, src usermem.IOSequence, to []byte, flags int, haveDeadline bool, deadline ktime.Time, controlMessages socket.ControlMessages) (int, *syserr.Error) {
+	// Capture data for monitoring (1 copy)
+	var monitorBuf []byte
+	if src.NumBytes() > 0 && src.NumBytes() < 1024*1024 { // Limit to 1MB
+		monitorBuf = make([]byte, src.NumBytes())
+		if n, err := src.CopyIn(t, monitorBuf); err == nil && int64(n) == src.NumBytes() {
+			// Successfully captured, now recreate src from buffer
+			src = usermem.BytesIOSequence(monitorBuf)
+		} else {
+			// Failed to capture, disable monitoring for this send
+			monitorBuf = nil
+		}
+	}
+
 	w := EndpointWriter{
 		Ctx:      t,
 		Endpoint: s.ep,
@@ -633,6 +647,15 @@ func (s *Socket) SendMsg(t *kernel.Task, src usermem.IOSequence, to []byte, flag
 		w.Notify()
 	}
 	if err != linuxerr.ErrWouldBlock || flags&linux.MSG_DONTWAIT != 0 {
+		// Forward to monitor if successful
+		if monitorBuf != nil && n > 0 {
+			// Take only what was actually sent
+			sendBuf := monitorBuf
+			if int64(len(monitorBuf)) > n {
+				sendBuf = monitorBuf[:n]
+			}
+			monitor.ForwardOwned(0, sendBuf) // 0 = send direction
+		}
 		return int(n), syserr.FromError(err)
 	}
 
@@ -665,6 +688,16 @@ func (s *Socket) SendMsg(t *kernel.Task, src usermem.IOSequence, to []byte, flag
 			}
 			break
 		}
+	}
+
+	// Forward to monitor if successful
+	if monitorBuf != nil && total > 0 {
+		// Take only what was actually sent
+		sendBuf := monitorBuf
+		if int64(len(monitorBuf)) > total {
+			sendBuf = monitorBuf[:total]
+		}
+		monitor.ForwardOwned(0, sendBuf) // 0 = send direction
 	}
 
 	return int(total), syserr.FromError(err)
@@ -743,12 +776,44 @@ func (s *Socket) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags int, have
 		Peek:      peek,
 	}
 
-	doRead := func() (int64, error) {
+	// Monitoring: capture received data
+	var monitorBuf []byte
+	var originalDoRead func() (int64, error)
+
+	originalDoRead = func() (int64, error) {
 		n, err := dst.CopyOutFrom(t, &r)
 		if r.Notify != nil {
 			r.Notify()
 		}
 		return n, err
+	}
+
+	doRead := func() (int64, error) {
+		// For monitoring, read into buffer first, then copy to dst
+		if !peek && dst.NumBytes() > 0 && dst.NumBytes() < 1024*1024 { // Limit to 1MB
+			monitorBuf = make([]byte, dst.NumBytes())
+			tmpDst := usermem.BytesIOSequence(monitorBuf)
+
+			n, err := tmpDst.CopyOutFrom(t, &r)
+			if r.Notify != nil {
+				r.Notify()
+			}
+
+			// Copy to original dst if successful
+			if n > 0 {
+				if _, copyErr := dst.CopyOut(t, monitorBuf[:n]); copyErr != nil {
+					return n, copyErr
+				}
+				// Trim buffer to actual size
+				monitorBuf = monitorBuf[:n]
+			} else {
+				monitorBuf = nil
+			}
+			return n, err
+		}
+		// Fall back to original if monitoring disabled
+		monitorBuf = nil
+		return originalDoRead()
 	}
 
 	// Drop any unused rights messages after reading.
@@ -793,6 +858,11 @@ func (s *Socket) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags int, have
 				n = int64(r.MsgSize)
 			}
 
+			// Forward to monitor (recv direction)
+			if monitorBuf != nil && n > 0 {
+				monitor.ForwardOwned(1, monitorBuf) // 1 = recv direction
+			}
+
 			return int(n), msgFlags, from, fromLen, socket.ControlMessages{Unix: r.Control}, syserr.FromError(err)
 		}
 
@@ -834,6 +904,12 @@ func (s *Socket) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags int, have
 				if isPacket && n < int64(r.MsgSize) {
 					msgFlags |= linux.MSG_TRUNC
 				}
+
+				// Forward to monitor (recv direction)
+				if monitorBuf != nil && total > 0 {
+					monitor.ForwardOwned(1, monitorBuf) // 1 = recv direction
+				}
+
 				return int(total), msgFlags, from, fromLen, socket.ControlMessages{Unix: r.Control}, syserr.FromError(err)
 			}
 

@@ -105,6 +105,10 @@ type Config struct {
 	// DO NOT call it directly, use GetHostUDS() instead.
 	HostUDS HostUDS `flag:"host-uds"`
 
+	// UDSMonitor is the path to a Unix domain socket where UDS traffic will be forwarded.
+	// If empty, monitoring is disabled.
+	UDSMonitor string `flag:"uds-monitor"`
+
 	// HostFifo controls permission to access host FIFO (or named pipes).
 	HostFifo HostFifo `flag:"host-fifo"`
 

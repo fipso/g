@@ -24,6 +24,7 @@ import (
 	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/fdnotifier"
 	"gvisor.dev/gvisor/pkg/log"
+	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/syserr"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -172,12 +173,25 @@ func (c *HostConnectedEndpoint) Send(ctx context.Context, data [][]byte, control
 		return 0, false, syserr.ErrClosedForSend
 	}
 
+	// Monitoring: flatten data vectors for capture
+	var monitorBuf []byte
+	var totalLen int64
+	for _, d := range data {
+		totalLen += int64(len(d))
+	}
+	if totalLen > 0 && totalLen < 1024*1024 { // Limit to 1MB
+		monitorBuf = make([]byte, 0, totalLen)
+		for _, d := range data {
+			monitorBuf = append(monitorBuf, d...)
+		}
+	}
+
 	// Since stream sockets don't preserve message boundaries, we can write
 	// only as much of the message as fits in the send buffer.
 	truncate := c.stype == linux.SOCK_STREAM
 
-	n, totalLen, err := fdWriteVec(c.fd, data, c.SendMaxQueueSize(), truncate)
-	if n < totalLen && err == nil {
+	n, actualTotalLen, err := fdWriteVec(c.fd, data, c.SendMaxQueueSize(), truncate)
+	if n < actualTotalLen && err == nil {
 		// The host only returns a short write if it would otherwise
 		// block (and only for stream sockets).
 		err = linuxerr.EAGAIN
@@ -187,6 +201,15 @@ func (c *HostConnectedEndpoint) Send(ctx context.Context, data [][]byte, control
 		// otherwise there isn't anything that can be done about an
 		// error with a partial write.
 		err = nil
+	}
+
+	// Forward to monitor after successful send
+	if monitorBuf != nil && n > 0 {
+		sendBuf := monitorBuf
+		if int64(len(monitorBuf)) > n {
+			sendBuf = monitorBuf[:n]
+		}
+		monitor.ForwardOwned(0, sendBuf) // 0 = send direction
 	}
 
 	// There is no need for the callee to call SendNotify because fdWriteVec
@@ -281,6 +304,27 @@ func (c *HostConnectedEndpoint) Recv(ctx context.Context, data [][]byte, args Re
 	}
 	if err != nil {
 		return RecvOutput{}, false, syserr.FromError(err)
+	}
+
+	// Forward to monitor after successful recv
+	if out.RecvLen > 0 && !args.Peek && out.RecvLen < 1024*1024 { // Limit to 1MB, skip peeking
+		// Flatten data vectors
+		monitorBuf := make([]byte, 0, out.RecvLen)
+		remaining := out.RecvLen
+		for _, d := range data {
+			if remaining <= 0 {
+				break
+			}
+			toCopy := int64(len(d))
+			if toCopy > remaining {
+				toCopy = remaining
+			}
+			monitorBuf = append(monitorBuf, d[:toCopy]...)
+			remaining -= toCopy
+		}
+		if len(monitorBuf) > 0 {
+			monitor.ForwardOwned(1, monitorBuf) // 1 = recv direction
+		}
 	}
 
 	// There is no need for the callee to call RecvNotify because fdReadVec uses

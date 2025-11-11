@@ -58,6 +58,7 @@ import (
 	pb "gvisor.dev/gvisor/pkg/sentry/seccheck/points/points_go_proto"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netfilter"
 	"gvisor.dev/gvisor/pkg/sentry/socket/plugin"
+	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/time"
 	"gvisor.dev/gvisor/pkg/sentry/usage"
@@ -393,6 +394,10 @@ type Args struct {
 	// RootfsUpperTarFD is the file descriptor to the tar file containing the rootfs
 	// upper layer changes.
 	RootfsUpperTarFD int
+
+	// MonitorFD is the file descriptor to the UDS monitor socket. The Loader
+	// takes ownership of this FD and may close it at any time.
+	MonitorFD int
 }
 
 // HostTHP holds host transparent hugepage settings.
@@ -467,6 +472,13 @@ func New(args Args) (*Loader, error) {
 
 	if specutils.NVProxyEnabled(args.Spec, args.Conf) {
 		nvproxy.Init()
+	}
+
+	// Initialize UDS monitoring if configured
+	if args.MonitorFD >= 0 {
+		if err := monitor.Init(args.MonitorFD); err != nil {
+			log.Warningf("Failed to initialize UDS monitor: %v", err)
+		}
 	}
 
 	kernel.IOUringEnabled = args.Conf.IOUring

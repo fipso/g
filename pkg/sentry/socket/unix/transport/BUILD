@@ -97,6 +97,7 @@ go_library(
         "//pkg/log",
         "//pkg/refs",
         "//pkg/sentry/hostfd",
+        "//pkg/sentry/socket/unix/monitor",
         "//pkg/sentry/uniqueid",
         "//pkg/sync",
         "//pkg/sync/locking",
