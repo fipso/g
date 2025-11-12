@@ -50,7 +50,6 @@ func (fs *filesystem) UntarUpperLayer(ctx context.Context, inFile *os.File) erro
 //   - filesystem.mu must be locked.
 func (fs *filesystem) readFromTar(ctx context.Context, tr *tar.Reader) error {
 	pathToInode := map[string]*inode{}
-	pathToInode["./"] = fs.root.inode
 	directoryToHeader := map[string]*tar.Header{}
 	fileToHeader := map[string]*tar.Header{}
 	symlinkToHeader := map[string]*tar.Header{}
@@ -77,8 +76,10 @@ func (fs *filesystem) readFromTar(ctx context.Context, tr *tar.Reader) error {
 			if n != header.Size {
 				return fmt.Errorf("failed to read all file content, got %d bytes, want %d", n, header.Size)
 			}
+			if header.Size > 0 {
+				fileToContent[header.Name] = &buffer
+			}
 			fileToHeader[header.Name] = header
-			fileToContent[header.Name] = &buffer
 		case tar.TypeFifo, tar.TypeBlock, tar.TypeChar:
 			fileToHeader[header.Name] = header
 		case tar.TypeSymlink:
@@ -123,6 +124,15 @@ func (fs *filesystem) readFromTar(ctx context.Context, tr *tar.Reader) error {
 func (fs *filesystem) mkdirFromTar(hdr *tar.Header, pathToInode map[string]*inode, pathToHeader map[string]*tar.Header) (*inode, error) {
 	path := hdr.Name
 	if ino, ok := pathToInode[hdr.Name]; ok {
+		return ino, nil
+	}
+	if hdr.Name == "./" {
+		ino := fs.root.inode
+		ino.uid.Store(uint32(hdr.Uid))
+		ino.gid.Store(uint32(hdr.Gid))
+		ino.mode.Store(uint32(hdr.Mode) | linux.S_IFDIR)
+		ino.mtime.Store(hdr.ModTime.UnixNano())
+		pathToInode[hdr.Name] = ino
 		return ino, nil
 	}
 	dir, name := filepath.Split(strings.TrimSuffix(path, "/"))
