@@ -31,6 +31,8 @@ import (
 	"time"
 )
 
+// LINT.IfChange
+
 // Flags.
 var (
 	url            = flag.String("url", "", "HTTP request URL.")
@@ -150,3 +152,5 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "STATS: %s\n", string(metricsBytes))
 }
+
+// LINT.ThenChange(../../sglang/client/client.go)
