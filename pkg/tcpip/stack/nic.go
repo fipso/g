@@ -15,6 +15,7 @@
 package stack
 
 import (
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"gvisor.dev/gvisor/pkg/atomicbitops"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/stack/netmonitor"
 )
 
 // +stateify savable
@@ -423,6 +425,43 @@ func (n *nic) writeRawPacket(pkt *PacketBuffer) tcpip.Error {
 
 	if n.deliverLinkPackets {
 		n.DeliverLinkPacket(pkt.NetworkProtocolNumber, pkt)
+	}
+
+	// Forward TCP/UDP packets to net monitor
+	if netmonitor.Enabled() {
+		transProto := pkt.TransportProtocolNumber
+		if transProto == header.TCPProtocolNumber || transProto == header.UDPProtocolNumber {
+			proto := byte(netmonitor.ProtoTCP)
+			if transProto == header.UDPProtocolNumber {
+				proto = netmonitor.ProtoUDP
+			}
+
+			netHeader := pkt.NetworkHeader().Slice()
+			transHeader := pkt.TransportHeader().Slice()
+			if len(netHeader) > 0 && len(transHeader) >= 4 {
+				var srcIP, dstIP []byte
+				switch pkt.NetworkProtocolNumber {
+				case header.IPv4ProtocolNumber:
+					ipv4 := header.IPv4(netHeader)
+					srcAddr := ipv4.SourceAddress()
+					dstAddr := ipv4.DestinationAddress()
+					srcIP = srcAddr.AsSlice()
+					dstIP = dstAddr.AsSlice()
+				case header.IPv6ProtocolNumber:
+					ipv6 := header.IPv6(netHeader)
+					srcAddr := ipv6.SourceAddress()
+					dstAddr := ipv6.DestinationAddress()
+					srcIP = srcAddr.AsSlice()
+					dstIP = dstAddr.AsSlice()
+				}
+				if srcIP != nil {
+					srcPort := binary.BigEndian.Uint16(transHeader[0:2])
+					dstPort := binary.BigEndian.Uint16(transHeader[2:4])
+					payload := pkt.Data().AsRange().ToSlice()
+					netmonitor.Forward(netmonitor.DirOutbound, proto, srcIP, dstIP, srcPort, dstPort, payload)
+				}
+			}
+		}
 	}
 
 	if err := n.qDisc.WritePacket(pkt); err != nil {
@@ -872,6 +911,20 @@ func (n *nic) DeliverTransportPacket(protocol tcpip.TransportProtocolNumber, pkt
 		RemotePort:    srcPort,
 		RemoteAddress: src,
 	}
+
+	// Forward TCP/UDP packets to net monitor
+	if netmonitor.Enabled() && (protocol == header.TCPProtocolNumber || protocol == header.UDPProtocolNumber) {
+		proto := byte(netmonitor.ProtoTCP)
+		if protocol == header.UDPProtocolNumber {
+			proto = netmonitor.ProtoUDP
+		}
+		// For inbound, remote is source and local is destination
+		srcIP := id.RemoteAddress.AsSlice()
+		dstIP := id.LocalAddress.AsSlice()
+		payload := pkt.Data().AsRange().ToSlice()
+		netmonitor.Forward(netmonitor.DirInbound, proto, srcIP, dstIP, id.RemotePort, id.LocalPort, payload)
+	}
+
 	if n.stack.demux.deliverPacket(protocol, pkt, id) {
 		return TransportPacketHandled
 	}

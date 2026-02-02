@@ -275,6 +275,7 @@ go_library(
         "//pkg/tcpip/internal/tcp",
         "//pkg/tcpip/ports",
         "//pkg/tcpip/seqnum",
+        "//pkg/tcpip/stack/netmonitor",
         "//pkg/tcpip/transport/tcpconntrack",
         "//pkg/waiter",
         "@org_golang_x_time//rate:go_default_library",

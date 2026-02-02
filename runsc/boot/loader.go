@@ -59,6 +59,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/socket/netfilter"
 	"gvisor.dev/gvisor/pkg/sentry/socket/plugin"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
+	"gvisor.dev/gvisor/pkg/tcpip/stack/netmonitor"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/time"
 	"gvisor.dev/gvisor/pkg/sentry/usage"
@@ -398,6 +399,10 @@ type Args struct {
 	// MonitorFD is the file descriptor to the UDS monitor socket. The Loader
 	// takes ownership of this FD and may close it at any time.
 	MonitorFD int
+
+	// NetMonitorFD is the file descriptor to the net monitor socket. The Loader
+	// takes ownership of this FD and may close it at any time.
+	NetMonitorFD int
 }
 
 // HostTHP holds host transparent hugepage settings.
@@ -478,6 +483,13 @@ func New(args Args) (*Loader, error) {
 	if args.MonitorFD >= 0 {
 		if err := monitor.Init(args.MonitorFD); err != nil {
 			log.Warningf("Failed to initialize UDS monitor: %v", err)
+		}
+	}
+
+	// Initialize net monitoring if configured
+	if args.NetMonitorFD >= 0 {
+		if err := netmonitor.Init(args.NetMonitorFD); err != nil {
+			log.Warningf("Failed to initialize net monitor: %v", err)
 		}
 	}
 

@@ -109,6 +109,10 @@ type Config struct {
 	// If empty, monitoring is disabled.
 	UDSMonitor string `flag:"uds-monitor"`
 
+	// NetMonitor is the path to a Unix domain socket where TCP/UDP traffic will be forwarded.
+	// If empty, monitoring is disabled.
+	NetMonitor string `flag:"net-monitor"`
+
 	// HostFifo controls permission to access host FIFO (or named pipes).
 	HostFifo HostFifo `flag:"host-fifo"`
 

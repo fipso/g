@@ -129,6 +129,7 @@ func RegisterFlags(flagSet *flag.FlagSet) {
 	flagSet.Bool("fsgofer-host-uds", false, "DEPRECATED: use host-uds=all")
 	flagSet.Var(hostUDSPtr(HostUDSNone), flagHostUDS, "controls permission to access host Unix-domain sockets. Values: none|open|create|all, default: none")
 	flagSet.String("uds-monitor", "", "path to Unix domain socket where UDS traffic will be forwarded. If empty, monitoring is disabled.")
+	flagSet.String("net-monitor", "", "path to Unix domain socket where TCP/UDP traffic will be forwarded. If empty, monitoring is disabled.")
 	flagSet.Var(hostFifoPtr(HostFifoNone), "host-fifo", "controls permission to access host FIFOs (or named pipes). Values: none|open, default: none")
 	flagSet.Bool("gvisor-marker-file", false, "enable the presence of the /proc/gvisor/kernel_is_gvisor file that can be used by applications to detect that gVisor is in use")
 

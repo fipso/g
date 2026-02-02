@@ -986,6 +986,36 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 		}
 	}
 
+	// Connect to net monitor socket if configured
+	if conf.NetMonitor != "" {
+		netMonitorConn, err := net.Dial("unix", conf.NetMonitor)
+		if err != nil {
+			log.Warningf("Failed to connect to net monitor socket %q: %v", conf.NetMonitor, err)
+		} else {
+			// Send handshake message with sandbox ID
+			handshake := fmt.Sprintf("CONTAINER_ID=%s\n", s.ID)
+			if _, err := netMonitorConn.Write([]byte(handshake)); err != nil {
+				log.Warningf("Failed to send handshake to net monitor: %v", err)
+				netMonitorConn.Close()
+			} else {
+				// Convert net.Conn to *os.File
+				if unixConn, ok := netMonitorConn.(*net.UnixConn); ok {
+					if netMonitorFile, err := unixConn.File(); err == nil {
+						donations.DonateAndClose("net-monitor-fd", netMonitorFile)
+						// Close the original connection since we donated the file
+						netMonitorConn.Close()
+					} else {
+						log.Warningf("Failed to get file from net monitor connection: %v", err)
+						netMonitorConn.Close()
+					}
+				} else {
+					log.Warningf("Net monitor connection is not a UnixConn")
+					netMonitorConn.Close()
+				}
+			}
+		}
+	}
+
 	// Pass gofer mount configs.
 	cmd.Args = append(cmd.Args, "--gofer-mount-confs="+args.GoferMountConfs.String())
 

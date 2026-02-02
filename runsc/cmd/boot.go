@@ -201,6 +201,9 @@ type Boot struct {
 
 	// monitorFD is the file descriptor to the UDS monitor socket.
 	monitorFD int
+
+	// netMonitorFD is the file descriptor to the net monitor socket.
+	netMonitorFD int
 }
 
 // Name implements subcommands.Command.Name.
@@ -255,6 +258,7 @@ func (b *Boot) SetFlags(f *flag.FlagSet) {
 	f.Var(&b.saveFDs, "save-fds", "ordered list of file descriptors to be used save checkpoints. Order: kernel state, page metadata, page file")
 	f.IntVar(&b.rootfsUpperTarFD, "rootfs-upper-tar-fd", -1, "file descriptor to the tar file containing the rootfs upper layer changes.")
 	f.IntVar(&b.monitorFD, "monitor-fd", -1, "file descriptor to the UDS monitor socket.")
+	f.IntVar(&b.netMonitorFD, "net-monitor-fd", -1, "file descriptor to the net monitor socket.")
 
 	// Profiling flags.
 	b.profileFDs.SetFromFlags(f)
@@ -556,6 +560,7 @@ func (b *Boot) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomma
 		SaveFDs:             b.saveFDs.GetFDs(),
 		RootfsUpperTarFD:    b.rootfsUpperTarFD,
 		MonitorFD:           b.monitorFD,
+		NetMonitorFD:        b.netMonitorFD,
 	}
 	b.setBootArgsExtra(&bootArgs)
 	l, err := boot.New(bootArgs)
