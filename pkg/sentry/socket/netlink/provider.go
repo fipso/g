@@ -20,6 +20,7 @@ import (
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/sockfs"
+	"gvisor.dev/gvisor/pkg/sentry/inet"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/socket"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netlink/nlmsg"
@@ -49,6 +50,18 @@ type Protocol interface {
 	// other end of the socket. Setting ms.Multi will cause an NLMSG_DONE
 	// message to be sent even if ms contains no messages.
 	ProcessMessage(ctx context.Context, s *Socket, msg *nlmsg.Message, ms *nlmsg.MessageSet) *syserr.Error
+}
+
+// RouteProtocol corresponds to the NETLINK_ROUTE family.
+type RouteProtocol interface {
+	Protocol
+
+	// AddNewLinkMessage is called when an interface is mutated or created by the stack.
+	// It is the rough equivalent of Linux's rtnetlink_event().
+	AddNewLinkMessage(ms *nlmsg.MessageSet, idx int32, i inet.Interface)
+
+	// AddDelLinkMessage is called when an interface is deleted by the stack.
+	AddDelLinkMessage(ms *nlmsg.MessageSet, idx int32, i inet.Interface)
 }
 
 // Provider is a function that creates a new Protocol for a specific netlink
@@ -104,7 +117,7 @@ func (*socketProvider) Socket(t *kernel.Task, stype linux.SockType, protocol int
 	mnt := t.Kernel().SocketMount()
 	d := sockfs.NewDentry(t, mnt)
 	defer d.DecRef(t)
-	if err := vfsfd.Init(s, linux.O_RDWR, mnt, d, &vfs.FileDescriptionOptions{
+	if err := vfsfd.Init(s, linux.O_RDWR, t.Credentials(), mnt, d, &vfs.FileDescriptionOptions{
 		DenyPRead:         true,
 		DenyPWrite:        true,
 		UseDentryMetadata: true,

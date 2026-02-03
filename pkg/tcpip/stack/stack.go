@@ -902,8 +902,8 @@ type NICOptions struct {
 
 // GetNICByID return a network device associated with the specified ID.
 func (s *Stack) GetNICByID(id tcpip.NICID) (*nic, tcpip.Error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	n, ok := s.nics[id]
 	if !ok {
@@ -1024,7 +1024,7 @@ func (s *Stack) CheckNIC(id tcpip.NICID) bool {
 // RemoveNIC removes NIC and all related routes from the network stack.
 func (s *Stack) RemoveNIC(id tcpip.NICID) tcpip.Error {
 	s.mu.Lock()
-	deferAct, err := s.removeNICLocked(id)
+	deferAct, err := s.removeNICLocked(id, true /* closeLinkEndpoint */)
 	s.mu.Unlock()
 	if deferAct != nil {
 		deferAct()
@@ -1035,7 +1035,7 @@ func (s *Stack) RemoveNIC(id tcpip.NICID) tcpip.Error {
 // removeNICLocked removes NIC and all related routes from the network stack.
 //
 // +checklocks:s.mu
-func (s *Stack) removeNICLocked(id tcpip.NICID) (func(), tcpip.Error) {
+func (s *Stack) removeNICLocked(id tcpip.NICID, closeLinkEndpoint bool) (func(), tcpip.Error) {
 	nic, ok := s.nics[id]
 	if !ok {
 		return nil, &tcpip.ErrUnknownNICID{}
@@ -1063,7 +1063,19 @@ func (s *Stack) removeNICLocked(id tcpip.NICID) (func(), tcpip.Error) {
 	if s.loopbackNIC == nic {
 		s.loopbackNIC = nil
 	}
-	return nic.remove(true /* closeLinkEndpoint */)
+	return nic.remove(closeLinkEndpoint)
+}
+
+// GetNICCoordinatorID returns the ID of the coordinator device of a NIC.
+func (s *Stack) GetNICCoordinatorID(id tcpip.NICID) (tcpip.NICID, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if nic, ok := s.nics[id]; ok {
+		if nic.Primary != nil {
+			return nic.Primary.id, true
+		}
+	}
+	return 0, false
 }
 
 // SetNICCoordinator sets a coordinator device.
@@ -1166,6 +1178,9 @@ type NICInfo struct {
 	// MulticastForwarding holds the forwarding status for each network endpoint
 	// that supports multicast forwarding.
 	MulticastForwarding map[tcpip.NetworkProtocolNumber]bool
+
+	// Primary is the index of the main controlling interface in a bonded setup.
+	Primary tcpip.NICID
 }
 
 // HasNIC returns true if the NICID is defined in the stack.
@@ -1176,65 +1191,87 @@ func (s *Stack) HasNIC(id tcpip.NICID) bool {
 	return ok
 }
 
+type forwardingFn func(tcpip.NetworkProtocolNumber) (bool, tcpip.Error)
+
+func forwardingValue(forwardingFn forwardingFn, proto tcpip.NetworkProtocolNumber, nicID tcpip.NICID, fnName string) (forward bool, ok bool) {
+	switch forwarding, err := forwardingFn(proto); err.(type) {
+	case nil:
+		return forwarding, true
+	case *tcpip.ErrUnknownProtocol:
+		panic(fmt.Sprintf("expected network protocol %d to be available on NIC %d", proto, nicID))
+	case *tcpip.ErrNotSupported:
+		// Not all network protocols support forwarding.
+	default:
+		panic(fmt.Sprintf("nic(id=%d).%s(%d): %s", nicID, fnName, proto, err))
+	}
+	return false, false
+}
+
+// precondition: s.mu is held.
+func (s *Stack) nicInfo(nic *nic, id tcpip.NICID) *NICInfo {
+	flags := NICStateFlags{
+		Up:          true, // Netstack interfaces are always up.
+		Running:     nic.Enabled(),
+		Promiscuous: nic.Promiscuous(),
+		Loopback:    nic.IsLoopback(),
+	}
+
+	netStats := make(map[tcpip.NetworkProtocolNumber]NetworkEndpointStats)
+	for proto, netEP := range nic.networkEndpoints {
+		netStats[proto] = netEP.Stats()
+	}
+
+	info := NICInfo{
+		Name:                nic.name,
+		LinkAddress:         nic.NetworkLinkEndpoint.LinkAddress(),
+		ProtocolAddresses:   nic.primaryAddresses(),
+		Flags:               flags,
+		MTU:                 nic.NetworkLinkEndpoint.MTU(),
+		Stats:               nic.stats.local,
+		NetworkStats:        netStats,
+		Context:             nic.context,
+		ARPHardwareType:     nic.NetworkLinkEndpoint.ARPHardwareType(),
+		Forwarding:          make(map[tcpip.NetworkProtocolNumber]bool),
+		MulticastForwarding: make(map[tcpip.NetworkProtocolNumber]bool),
+	}
+
+	for proto := range s.networkProtocols {
+		if forwarding, ok := forwardingValue(nic.forwarding, proto, id, "forwarding"); ok {
+			info.Forwarding[proto] = forwarding
+		}
+
+		if multicastForwarding, ok := forwardingValue(nic.multicastForwarding, proto, id, "multicastForwarding"); ok {
+			info.MulticastForwarding[proto] = multicastForwarding
+		}
+	}
+
+	if nic.Primary != nil {
+		info.Primary = nic.Primary.id
+	}
+
+	return &info
+}
+
+// SingleNICInfo returns the NICInfo for the given NICID.
+func (s *Stack) SingleNICInfo(id tcpip.NICID) (*NICInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if nic, ok := s.nics[id]; !ok {
+		return nil, false
+	} else {
+		return s.nicInfo(nic, id), true
+	}
+}
+
 // NICInfo returns a map of NICIDs to their associated information.
 func (s *Stack) NICInfo() map[tcpip.NICID]NICInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	type forwardingFn func(tcpip.NetworkProtocolNumber) (bool, tcpip.Error)
-	forwardingValue := func(forwardingFn forwardingFn, proto tcpip.NetworkProtocolNumber, nicID tcpip.NICID, fnName string) (forward bool, ok bool) {
-		switch forwarding, err := forwardingFn(proto); err.(type) {
-		case nil:
-			return forwarding, true
-		case *tcpip.ErrUnknownProtocol:
-			panic(fmt.Sprintf("expected network protocol %d to be available on NIC %d", proto, nicID))
-		case *tcpip.ErrNotSupported:
-			// Not all network protocols support forwarding.
-		default:
-			panic(fmt.Sprintf("nic(id=%d).%s(%d): %s", nicID, fnName, proto, err))
-		}
-		return false, false
-	}
-
 	nics := make(map[tcpip.NICID]NICInfo)
 	for id, nic := range s.nics {
-		flags := NICStateFlags{
-			Up:          true, // Netstack interfaces are always up.
-			Running:     nic.Enabled(),
-			Promiscuous: nic.Promiscuous(),
-			Loopback:    nic.IsLoopback(),
-		}
-
-		netStats := make(map[tcpip.NetworkProtocolNumber]NetworkEndpointStats)
-		for proto, netEP := range nic.networkEndpoints {
-			netStats[proto] = netEP.Stats()
-		}
-
-		info := NICInfo{
-			Name:                nic.name,
-			LinkAddress:         nic.NetworkLinkEndpoint.LinkAddress(),
-			ProtocolAddresses:   nic.primaryAddresses(),
-			Flags:               flags,
-			MTU:                 nic.NetworkLinkEndpoint.MTU(),
-			Stats:               nic.stats.local,
-			NetworkStats:        netStats,
-			Context:             nic.context,
-			ARPHardwareType:     nic.NetworkLinkEndpoint.ARPHardwareType(),
-			Forwarding:          make(map[tcpip.NetworkProtocolNumber]bool),
-			MulticastForwarding: make(map[tcpip.NetworkProtocolNumber]bool),
-		}
-
-		for proto := range s.networkProtocols {
-			if forwarding, ok := forwardingValue(nic.forwarding, proto, id, "forwarding"); ok {
-				info.Forwarding[proto] = forwarding
-			}
-
-			if multicastForwarding, ok := forwardingValue(nic.multicastForwarding, proto, id, "multicastForwarding"); ok {
-				info.MulticastForwarding[proto] = multicastForwarding
-			}
-		}
-
-		nics[id] = info
+		nics[id] = *s.nicInfo(nic, id)
 	}
 	return nics
 }
@@ -1998,7 +2035,7 @@ func (s *Stack) Wait() {
 	for id, n := range s.nics {
 		// Remove NIC to ensure that qDisc goroutines are correctly
 		// terminated on stack teardown.
-		act, _ := s.removeNICLocked(id)
+		act, _ := s.removeNICLocked(id, true /* closeLinkEndpoint */)
 		n.NetworkLinkEndpoint.Wait()
 		if act != nil {
 			deferActs = append(deferActs, act)
@@ -2481,12 +2518,11 @@ func (s *Stack) SetNICStack(id tcpip.NICID, peer *Stack) (tcpip.NICID, tcpip.Err
 		s.mu.Unlock()
 		return id, nil
 	}
-	delete(s.nics, id)
 
-	// Remove routes in-place. n tracks the number of routes written.
-	s.RemoveRoutes(func(r tcpip.Route) bool { return r.NIC == id })
-	ne := nic.NetworkLinkEndpoint.(LinkEndpoint)
-	deferAct, err := nic.remove(false /* closeLinkEndpoint */)
+	linkEp := nic.NetworkLinkEndpoint.(LinkEndpoint)
+	name := nic.Name()
+
+	deferAct, err := s.removeNICLocked(id, false /* closeLinkEndpoint */)
 	s.mu.Unlock()
 	if deferAct != nil {
 		deferAct()
@@ -2496,7 +2532,7 @@ func (s *Stack) SetNICStack(id tcpip.NICID, peer *Stack) (tcpip.NICID, tcpip.Err
 	}
 
 	id = tcpip.NICID(peer.NextNICID())
-	return id, peer.CreateNICWithOptions(id, ne, NICOptions{Name: nic.Name()})
+	return id, peer.CreateNICWithOptions(id, linkEp, NICOptions{Name: name})
 }
 
 // EnableSaveRestore marks the saveRestoreEnabled to true.

@@ -1,4 +1,4 @@
-// Copyright 2023 The gVisor Authors.
+// Copyright 2020 The gVisor Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// https://go.dev/cl/670497 (1.25) adds a new wait reason, adjusting the value of waitReasonSemacquire.
-//go:build go1.25
+//go:build amd64
 
-package sync
+#include "textflag.h"
 
-// Values for the reason argument to gopark, from Go's src/runtime/runtime2.go.
-const (
-	WaitReasonSelect      uint8 = 9  // +checkconst runtime waitReasonSelect
-	WaitReasonChanReceive uint8 = 14 // +checkconst runtime waitReasonChanReceive
-	WaitReasonSemacquire  uint8 = 19 // +checkconst runtime waitReasonSemacquire
-)
+#define GOID_OFFSET 152
+
+// func goid() int64
+TEXT ·goid(SB),NOSPLIT|NOFRAME,$0-8
+  MOVQ (TLS), R14
+  MOVQ GOID_OFFSET(R14), R14
+  MOVQ R14, ret+0(FP)
+  RET

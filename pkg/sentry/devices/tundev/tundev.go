@@ -29,6 +29,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 	"gvisor.dev/gvisor/pkg/sentry/inet"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
+	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netstack"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/tcpip/link/tun"
@@ -51,7 +52,7 @@ type tunDevice struct{}
 // Open implements vfs.Device.Open.
 func (tunDevice) Open(ctx context.Context, mnt *vfs.Mount, vfsd *vfs.Dentry, opts vfs.OpenOptions) (*vfs.FileDescription, error) {
 	fd := &tunFD{}
-	if err := fd.vfsfd.Init(fd, opts.Flags, mnt, vfsd, &vfs.FileDescriptionOptions{
+	if err := fd.vfsfd.Init(fd, opts.Flags, auth.CredentialsFromContext(ctx), mnt, vfsd, &vfs.FileDescriptionOptions{
 		UseDentryMetadata: true,
 	}); err != nil {
 		return nil, err
@@ -83,7 +84,7 @@ func (fd *tunFD) Ioctl(ctx context.Context, uio usermem.IO, sysno uintptr, args 
 
 	switch request {
 	case linux.TUNSETIFF:
-		if !t.HasCapability(linux.CAP_NET_ADMIN) {
+		if !t.NetworkNamespace().HasCapability(ctx, linux.CAP_NET_ADMIN) {
 			return 0, linuxerr.EPERM
 		}
 		stack, ok := t.NetworkContext().(*netstack.Stack)

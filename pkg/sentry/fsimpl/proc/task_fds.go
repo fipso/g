@@ -131,7 +131,7 @@ func (fs *filesystem) newFDDirInode(ctx context.Context, task *kernel.Task) kern
 			produceSymlink: true,
 		},
 	}
-	inode.InodeAttrs.Init(ctx, task.Credentials(), linux.UNNAMED_MAJOR, fs.devMinor, fs.NextIno(), linux.ModeDirectory|0555)
+	inode.InodeAttrs.Init(ctx, task.Credentials(), linux.UNNAMED_MAJOR, fs.devMinor, fs.NextIno(), linux.ModeDirectory|0500)
 	inode.InitRefs()
 	inode.OrderedChildren.Init(kernfs.OrderedChildrenOptions{})
 	return inode
@@ -157,7 +157,7 @@ func (i *fdDirInode) Lookup(ctx context.Context, name string) (kernfs.Inode, err
 
 // Open implements kernfs.Inode.Open.
 func (i *fdDirInode) Open(ctx context.Context, rp *vfs.ResolvingPath, d *kernfs.Dentry, opts vfs.OpenOptions) (*vfs.FileDescription, error) {
-	fd, err := kernfs.NewGenericDirectoryFD(rp.Mount(), d, &i.OrderedChildren, &i.locks, &opts, kernfs.GenericDirectoryFDOptions{
+	fd, err := kernfs.NewGenericDirectoryFD(rp.Mount(), d, rp.Credentials(), &i.OrderedChildren, &i.locks, &opts, kernfs.GenericDirectoryFDOptions{
 		SeekEnd: kernfs.SeekEndZero,
 	})
 	if err != nil {
@@ -223,6 +223,9 @@ func (fs *filesystem) newFDSymlink(ctx context.Context, task *kernel.Task, fd in
 }
 
 func (s *fdSymlink) Readlink(ctx context.Context, _ *vfs.Mount) (string, error) {
+	if !kernel.ContextCanTrace(ctx, s.task, false) {
+		return "", linuxerr.EACCES
+	}
 	file, _ := getTaskFD(s.task, s.fd)
 	if file == nil {
 		return "", linuxerr.ENOENT
@@ -236,6 +239,9 @@ func (s *fdSymlink) Readlink(ctx context.Context, _ *vfs.Mount) (string, error) 
 }
 
 func (s *fdSymlink) Getlink(ctx context.Context, mnt *vfs.Mount) (vfs.VirtualDentry, string, error) {
+	if !kernel.ContextCanTrace(ctx, s.task, false) {
+		return vfs.VirtualDentry{}, "", linuxerr.EACCES
+	}
 	file, _ := getTaskFD(s.task, s.fd)
 	if file == nil {
 		return vfs.VirtualDentry{}, "", linuxerr.ENOENT
@@ -309,7 +315,7 @@ func (i *fdInfoDirInode) IterDirents(ctx context.Context, mnt *vfs.Mount, cb vfs
 
 // Open implements kernfs.Inode.Open.
 func (i *fdInfoDirInode) Open(ctx context.Context, rp *vfs.ResolvingPath, d *kernfs.Dentry, opts vfs.OpenOptions) (*vfs.FileDescription, error) {
-	fd, err := kernfs.NewGenericDirectoryFD(rp.Mount(), d, &i.OrderedChildren, &i.locks, &opts, kernfs.GenericDirectoryFDOptions{
+	fd, err := kernfs.NewGenericDirectoryFD(rp.Mount(), d, rp.Credentials(), &i.OrderedChildren, &i.locks, &opts, kernfs.GenericDirectoryFDOptions{
 		SeekEnd: kernfs.SeekEndZero,
 	})
 	if err != nil {

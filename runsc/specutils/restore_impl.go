@@ -1,4 +1,4 @@
-// Copyright 2018 The gVisor Authors.
+// Copyright 2025 The gVisor Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !go1.25
+//go:build !false
+// +build !false
 
-#include "textflag.h"
+package specutils
 
-#define M_OFFSET       48 // +checkoffset runtime g.m
-#define PROCID_OFFSET  72 // +checkoffset runtime m.procid
+import (
+	specs "github.com/opencontainers/runtime-spec/specs-go"
+)
 
-TEXT ·Current(SB),NOSPLIT|NOFRAME,$0-8
-	// procid is in getg().m.procid.
-	MOVQ TLS, AX
-	MOVQ 0(AX)(TLS*1), AX
-	MOVQ M_OFFSET(AX), AX // gp.m
-	MOVQ PROCID_OFFSET(AX), AX // mp.procid
-	MOVQ AX, ret+0(FP)
-	RET
+func prevalidateDevicesImpl(field, cName string, o, n []specs.LinuxDevice) ([]specs.LinuxDevice, []specs.LinuxDevice, error) {
+	return o, n, nil
+}

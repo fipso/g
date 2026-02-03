@@ -16,6 +16,7 @@ package nvgpu
 
 import (
 	"fmt"
+	"structs"
 )
 
 // ClassID is a client class ID, in the sense of
@@ -58,7 +59,10 @@ const (
 	NV01_DEVICE_0                    = 0x00000080
 	NV_SEMAPHORE_SURFACE             = 0x000000da
 	RM_USER_SHARED_DATA              = 0x000000de
+	NV_MEMORY_EXPORT                 = 0x000000e0
+	NV_IMEX_SESSION                  = 0x000000f1
 	NV_MEMORY_FABRIC                 = 0x000000f8
+	NV_MEMORY_FABRIC_IMPORTED_REF    = 0x000000fb
 	NV_MEMORY_MULTICAST_FABRIC       = 0x000000fd
 	NV_MEMORY_MAPPER                 = 0x000000fe
 	NV20_SUBDEVICE_0                 = 0x00002080
@@ -129,6 +133,7 @@ const (
 //
 // +marshal
 type NV2081_ALLOC_PARAMETERS struct {
+	_        structs.HostLayout
 	Reserved uint32
 }
 
@@ -137,6 +142,7 @@ type NV2081_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV0005_ALLOC_PARAMETERS struct {
+	_             structs.HostLayout
 	HParentClient Handle
 	HSrcResource  Handle
 	HClass        ClassID
@@ -159,6 +165,7 @@ const (
 //
 // +marshal
 type NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS struct {
+	_        structs.HostLayout
 	Offset   uint64
 	Limit    uint64
 	HVASpace Handle
@@ -175,6 +182,7 @@ const (
 //
 // +marshal
 type NV0080_ALLOC_PARAMETERS struct {
+	_               structs.HostLayout
 	DeviceID        uint32
 	HClientShare    Handle
 	HTargetClient   Handle
@@ -193,6 +201,7 @@ type NV0080_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV_SEMAPHORE_SURFACE_ALLOC_PARAMETERS struct {
+	_                structs.HostLayout
 	HSemaphoreMem    Handle
 	HMaxSubmittedMem Handle
 	flags            uint64
@@ -203,6 +212,7 @@ type NV_SEMAPHORE_SURFACE_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV2080_ALLOC_PARAMETERS struct {
+	_           structs.HostLayout
 	SubDeviceID uint32
 }
 
@@ -211,6 +221,7 @@ type NV2080_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV_CONTEXT_DMA_ALLOCATION_PARAMS struct {
+	_          structs.HostLayout
 	HSubDevice Handle
 	Flags      uint32
 	HMemory    Handle
@@ -224,6 +235,7 @@ type NV_CONTEXT_DMA_ALLOCATION_PARAMS struct {
 //
 // +marshal
 type NV_MEMORY_ALLOCATION_PARAMS struct {
+	_             structs.HostLayout
 	Owner         uint32
 	Type          uint32
 	Flags         uint32
@@ -254,6 +266,7 @@ type NV_MEMORY_ALLOCATION_PARAMS struct {
 //
 // +marshal
 type NV_MEMORY_ALLOCATION_PARAMS_V545 struct {
+	_ structs.HostLayout
 	NV_MEMORY_ALLOCATION_PARAMS
 	NumaNode int32
 	_        uint32
@@ -263,6 +276,7 @@ type NV_MEMORY_ALLOCATION_PARAMS_V545 struct {
 //
 // +marshal
 type NV503B_BAR1_P2P_DMA_INFO struct {
+	_          structs.HostLayout
 	DmaAddress uint64
 	DmaSize    uint64
 }
@@ -272,6 +286,7 @@ type NV503B_BAR1_P2P_DMA_INFO struct {
 //
 // +marshal
 type NV503B_ALLOC_PARAMETERS struct {
+	_                          structs.HostLayout
 	HSubDevice                 Handle
 	HPeerSubDevice             Handle
 	SubDevicePeerIDMask        uint32
@@ -290,6 +305,7 @@ type NV503B_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV503C_ALLOC_PARAMETERS struct {
+	_     structs.HostLayout
 	Flags uint32
 }
 
@@ -298,6 +314,7 @@ type NV503C_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV83DE_ALLOC_PARAMETERS struct {
+	_                        structs.HostLayout
 	HDebuggerClient_Obsolete Handle
 	HAppClient               Handle
 	HClass3DObject           Handle
@@ -308,6 +325,7 @@ type NV83DE_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV_CTXSHARE_ALLOCATION_PARAMETERS struct {
+	_        structs.HostLayout
 	HVASpace Handle
 	Flags    uint32
 	SubctxID uint32
@@ -318,6 +336,7 @@ type NV_CTXSHARE_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_VASPACE_ALLOCATION_PARAMETERS struct {
+	_               structs.HostLayout
 	Index           uint32
 	Flags           uint32
 	VASize          uint64
@@ -333,6 +352,7 @@ type NV_VASPACE_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_VASPACE_ALLOCATION_PARAMETERS_V580 struct {
+	_ structs.HostLayout
 	NV_VASPACE_ALLOCATION_PARAMETERS
 	Pasid uint32
 	Pad1  [4]byte
@@ -343,6 +363,7 @@ type NV_VASPACE_ALLOCATION_PARAMETERS_V580 struct {
 //
 // +marshal
 type NV_CHANNEL_GROUP_ALLOCATION_PARAMETERS struct {
+	_                           structs.HostLayout
 	HObjectError                Handle
 	HObjectECCError             Handle
 	HVASpace                    Handle
@@ -356,6 +377,7 @@ type NV_CHANNEL_GROUP_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_MEMORY_DESC_PARAMS struct {
+	_            structs.HostLayout
 	Base         uint64
 	Size         uint64
 	AddressSpace uint32
@@ -367,6 +389,7 @@ type NV_MEMORY_DESC_PARAMS struct {
 //
 // +marshal
 type NV_BSP_ALLOCATION_PARAMETERS struct {
+	_                         structs.HostLayout
 	Size                      uint32
 	ProhibitMultipleInstances uint32
 	EngineInstance            uint32
@@ -377,6 +400,7 @@ type NV_BSP_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_MSENC_ALLOCATION_PARAMETERS struct {
+	_                         structs.HostLayout
 	Size                      uint32
 	ProhibitMultipleInstances uint32
 	EngineInstance            uint32
@@ -388,6 +412,7 @@ type NV_MSENC_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_CHANNEL_ALLOC_PARAMS struct {
+	_                   structs.HostLayout
 	HObjectError        Handle
 	HObjectBuffer       Handle
 	GPFIFOOffset        uint64
@@ -421,6 +446,7 @@ type NV_CHANNEL_ALLOC_PARAMS struct {
 //
 // +marshal
 type NV_CHANNEL_ALLOC_PARAMS_V570 struct {
+	_ structs.HostLayout
 	NV_CHANNEL_ALLOC_PARAMS
 	TPCConfigID uint32
 	_           uint32
@@ -432,6 +458,7 @@ type NV_CHANNEL_ALLOC_PARAMS_V570 struct {
 //
 // +marshal
 type NVB0B5_ALLOCATION_PARAMETERS struct {
+	_          structs.HostLayout
 	Version    uint32
 	EngineType uint32
 }
@@ -441,6 +468,7 @@ type NVB0B5_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_GR_ALLOCATION_PARAMETERS struct {
+	_       structs.HostLayout
 	Version uint32
 	Flags   uint32
 	Size    uint32
@@ -452,6 +480,7 @@ type NV_GR_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV_HOPPER_USERMODE_A_PARAMS struct {
+	_           structs.HostLayout
 	Bar1Mapping uint8
 	Priv        uint8
 }
@@ -461,6 +490,7 @@ type NV_HOPPER_USERMODE_A_PARAMS struct {
 //
 // +marshal
 type NV9072_ALLOCATION_PARAMETERS struct {
+	_             structs.HostLayout
 	LogicalHeadID uint32
 	DisplayMask   uint32
 	Caps          uint32
@@ -471,6 +501,7 @@ type NV9072_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV00DE_ALLOC_PARAMETERS struct {
+	_        structs.HostLayout
 	Reserved uint32
 }
 
@@ -479,14 +510,68 @@ type NV00DE_ALLOC_PARAMETERS struct {
 //
 // +marshal
 type NV00DE_ALLOC_PARAMETERS_V545 struct {
+	_              structs.HostLayout
 	PolledDataMask uint64
 }
 
 // +marshal
 type nv00f8Map struct {
+	_       structs.HostLayout
 	offset  uint64
 	hVidMem Handle
 	flags   uint32
+}
+
+// From src/common/sdk/nvidia/inc/class/cl00e0.h:
+const (
+	NV_MEM_EXPORT_UUID_LEN     = 16
+	NV_MEM_EXPORT_METADATA_LEN = 64
+)
+
+// NV_EXPORT_MEM_PACKET is from
+// src/common/sdk/nvidia/inc/class/cl00e0.h
+//
+// +marshal
+type NV_EXPORT_MEM_PACKET struct {
+	_      structs.HostLayout
+	UUID   [NV_MEM_EXPORT_UUID_LEN]uint8
+	Opaque [16]uint8
+}
+
+// NV00E0_ALLOCATION_PARAMETERS is the alloc params type for NV_MEMORY_EXPORT,
+// from src/common/sdk/nvidia/inc/class/cl00e0.h.
+//
+// +marshal
+type NV00E0_ALLOCATION_PARAMETERS struct {
+	_                  structs.HostLayout
+	IMEXChannel        uint32
+	Packet             NV_EXPORT_MEM_PACKET
+	NumMaxHandles      uint16
+	Pad0               [2]byte
+	Flags              uint32
+	Metadata           [NV_MEM_EXPORT_METADATA_LEN]uint8
+	DeviceInstanceMask uint32
+	GIIDMasks          [NV_MAX_DEVICES]uint32
+	NumCurHandles      uint16
+	Pad1               [2]byte
+}
+
+// NV00F1_ALLOCATION_PARAMETERS is the alloc params type for NV_IMEX_SESSION,
+// from src/common/sdk/nvidia/inc/class/cl00f1.h.
+//
+// +marshal
+type NV00F1_ALLOCATION_PARAMETERS struct {
+	_             structs.HostLayout
+	CapDescriptor uint64
+	Flags         uint32
+	Pad0          [4]byte
+	// Despite being P64-typed by the driver, pOsEvent is a file descriptor
+	// whose numerical value is used by the driver. See
+	// src/nvidia/src/kernel/compute/imex_session_api.c:imexsessionapiConstruct_IMPL()
+	// => src/nvidia/arch/nvalloc/unix/src/os.c:osUserHandleToKernelPtr().
+	POsEvent P64
+	NodeID   uint16
+	Pad1     [6]byte
 }
 
 // NV00F8_ALLOCATION_PARAMETERS is the alloc param type for NV_MEMORY_FABRIC,
@@ -494,6 +579,7 @@ type nv00f8Map struct {
 //
 // +marshal
 type NV00F8_ALLOCATION_PARAMETERS struct {
+	_          structs.HostLayout
 	Alignment  uint64
 	AllocSize  uint64
 	PageSize   uint64
@@ -502,18 +588,18 @@ type NV00F8_ALLOCATION_PARAMETERS struct {
 	Map        nv00f8Map
 }
 
-// From src/common/sdk/nvidia/inc/class/cl00e0.h
-const (
-	NV_MEM_EXPORT_UUID_LEN = 16
-)
-
-// NV_EXPORT_MEM_PACKET is from
-// src/common/sdk/nvidia/inc/class/cl00e0.h
+// NV00FB_ALLOCATION_PARAMETERS is the alloc param type for
+// NV_MEMORY_FABRIC_IMPORTED_REF, from
+// src/common/sdk/nvidia/inc/class/cl00fb.h.
 //
 // +marshal
-type NV_EXPORT_MEM_PACKET struct {
-	UUID   [NV_MEM_EXPORT_UUID_LEN]uint8
-	Opaque [16]uint8
+type NV00FB_ALLOCATION_PARAMETERS struct {
+	_          structs.HostLayout
+	ExportUUID [NV_MEM_EXPORT_UUID_LEN]uint8
+	Index      uint16
+	Pad0       [2]byte
+	Flags      uint32
+	ID         uint64
 }
 
 // NV00FD_ALLOCATION_PARAMETERS is the alloc param type for NV_MEMORY_MULTICAST_FABRIC
@@ -521,6 +607,7 @@ type NV_EXPORT_MEM_PACKET struct {
 //
 // +marshal
 type NV00FD_ALLOCATION_PARAMETERS struct {
+	_          structs.HostLayout
 	Alignment  uint64
 	AllocSize  uint64
 	PageSize   uint32
@@ -535,6 +622,7 @@ type NV00FD_ALLOCATION_PARAMETERS struct {
 //
 // +marshal
 type NV00FD_ALLOCATION_PARAMETERS_V545 struct {
+	_         structs.HostLayout
 	ExpPacket NV_EXPORT_MEM_PACKET
 	Index     uint16
 	_         [6]byte
@@ -546,6 +634,7 @@ type NV00FD_ALLOCATION_PARAMETERS_V545 struct {
 //
 // +marshal
 type NV_MEMORY_MAPPER_ALLOCATION_PARAMS struct {
+	_      structs.HostLayout
 	unused uint8
 }
 
@@ -554,6 +643,7 @@ type NV_MEMORY_MAPPER_ALLOCATION_PARAMS struct {
 //
 // +marshal
 type NV_MEMORY_MAPPER_ALLOCATION_PARAMS_V550 struct {
+	_                 structs.HostLayout
 	HSemaphoreSurface Handle
 	MaxQueueSize      uint32
 }
@@ -563,6 +653,7 @@ type NV_MEMORY_MAPPER_ALLOCATION_PARAMS_V550 struct {
 //
 // +marshal
 type NV_MEMORY_MAPPER_ALLOCATION_PARAMS_V555 struct {
+	_ structs.HostLayout
 	NV_MEMORY_MAPPER_ALLOCATION_PARAMS_V550
 	HNotificationMemory Handle
 	_                   uint32
@@ -574,6 +665,7 @@ type NV_MEMORY_MAPPER_ALLOCATION_PARAMS_V555 struct {
 //
 // +marshal
 type NV_CONFIDENTIAL_COMPUTE_ALLOC_PARAMS struct {
+	_      structs.HostLayout
 	Handle Handle
 }
 
@@ -582,6 +674,7 @@ type NV_CONFIDENTIAL_COMPUTE_ALLOC_PARAMS struct {
 //
 // +marshal
 type NVA0BC_ALLOC_PARAMETERS struct {
+	_           structs.HostLayout
 	CodecType   uint32
 	HResolution uint32
 	VResolution uint32

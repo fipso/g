@@ -22,18 +22,8 @@ import (
 	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
+	"gvisor.dev/gvisor/pkg/sentry/kernel/version"
 	"gvisor.dev/gvisor/pkg/sentry/syscalls"
-)
-
-const (
-	// LinuxSysname is the OS name advertised by gVisor.
-	LinuxSysname = "Linux"
-
-	// LinuxRelease is the Linux release version number advertised by gVisor.
-	LinuxRelease = "4.4.0"
-
-	// LinuxVersion is the version info advertised by gVisor.
-	LinuxVersion = "#1 SMP Sun Jan 10 15:06:54 PST 2016"
 )
 
 // AMD64 is a table of Linux amd64 syscall API with the corresponding syscall
@@ -46,9 +36,9 @@ var AMD64 = &kernel.SyscallTable{
 		// guides the interface provided by this syscall table. The build
 		// version is that for a clean build with default kernel config, at 5
 		// minutes after v4.4 was tagged.
-		Sysname: LinuxSysname,
-		Release: LinuxRelease,
-		Version: LinuxVersion,
+		Sysname: version.LinuxSysname,
+		Release: version.LinuxRelease,
+		Version: version.LinuxVersion,
 	},
 	AuditNumber: linux.AUDIT_ARCH_X86_64,
 	Table: map[uintptr]kernel.Syscall{
@@ -382,8 +372,8 @@ var AMD64 = &kernel.SyscallTable{
 		// Syscalls implemented after 325 are "backports" from versions
 		// of Linux after 4.4.
 		326: syscalls.ErrorWithEvent("copy_file_range", linuxerr.ENOSYS, "", nil),
-		327: syscalls.SupportedPoint("preadv2", Preadv2, PointPreadv2),
-		328: syscalls.SupportedPoint("pwritev2", Pwritev2, PointPwritev2),
+		327: syscalls.PartiallySupportedPoint("preadv2", Preadv2, PointPreadv2, "RWF flags are not supported.", []string{"gvisor.dev/issue/2601"}),
+		328: syscalls.PartiallySupportedPoint("pwritev2", Pwritev2, PointPwritev2, "RWF flags are not supported.", []string{"gvisor.dev/issue/2601"}),
 		329: syscalls.ErrorWithEvent("pkey_mprotect", linuxerr.ENOSYS, "", nil),
 		330: syscalls.ErrorWithEvent("pkey_alloc", linuxerr.ENOSYS, "", nil),
 		331: syscalls.ErrorWithEvent("pkey_free", linuxerr.ENOSYS, "", nil),
@@ -425,9 +415,9 @@ var ARM64 = &kernel.SyscallTable{
 	OS:   abi.Linux,
 	Arch: arch.ARM64,
 	Version: kernel.Version{
-		Sysname: LinuxSysname,
-		Release: LinuxRelease,
-		Version: LinuxVersion,
+		Sysname: version.LinuxSysname,
+		Release: version.LinuxRelease,
+		Version: version.LinuxVersion,
 	},
 	AuditNumber: linux.AUDIT_ARCH_AARCH64,
 	Table: map[uintptr]kernel.Syscall{
@@ -703,8 +693,8 @@ var ARM64 = &kernel.SyscallTable{
 
 		// Syscalls after 284 are "backports" from versions of Linux after 4.4.
 		285: syscalls.ErrorWithEvent("copy_file_range", linuxerr.ENOSYS, "", nil),
-		286: syscalls.SupportedPoint("preadv2", Preadv2, PointPreadv2),
-		287: syscalls.SupportedPoint("pwritev2", Pwritev2, PointPwritev2),
+		286: syscalls.PartiallySupportedPoint("preadv2", Preadv2, PointPreadv2, "RWF flags are not supported.", []string{"gvisor.dev/issue/2601"}),
+		287: syscalls.PartiallySupportedPoint("pwritev2", Pwritev2, PointPwritev2, "RWF flags are not supported.", []string{"gvisor.dev/issue/2601"}),
 		288: syscalls.ErrorWithEvent("pkey_mprotect", linuxerr.ENOSYS, "", nil),
 		289: syscalls.ErrorWithEvent("pkey_alloc", linuxerr.ENOSYS, "", nil),
 		290: syscalls.ErrorWithEvent("pkey_free", linuxerr.ENOSYS, "", nil),

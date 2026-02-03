@@ -24,7 +24,6 @@ import (
 	"gvisor.dev/gvisor/pkg/goid"
 	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/refs"
-	"gvisor.dev/gvisor/pkg/sentry/hostcpu"
 	"gvisor.dev/gvisor/pkg/sentry/ktime"
 	"gvisor.dev/gvisor/pkg/sentry/memmap"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
@@ -207,7 +206,7 @@ func (app *runApp) execute(t *Task) taskRunState {
 	if t.rseqPreempted {
 		t.rseqPreempted = false
 		if t.rseqAddr != 0 || t.oldRSeqCPUAddr != 0 {
-			t.rseqCPU = int32(hostcpu.GetCPU())
+			t.rseqCPU = t.CPU()
 			if err := t.rseqCopyOutCPU(); err != nil {
 				t.Debugf("Failed to copy CPU to %#x for rseq: %v", t.rseqAddr, err)
 				t.forceSignal(linux.SIGSEGV, false)
@@ -306,6 +305,13 @@ func (app *runApp) execute(t *Task) taskRunState {
 				if sysno, ok := t.image.st.LookupEmulate(addr); ok {
 					return t.doVsyscall(addr, sysno)
 				}
+			}
+
+			// Fixup SIGSEGV err code if necessary; MProtect is capable of unmapping
+			// address ranges from the user process, in which case the initial
+			// signal may very well have appeared as SEGV_MAPERR, but we know better.
+			if sig == linux.SIGSEGV && err == linuxerr.EPERM {
+				info.Code = 2 // SEGV_ACCERR
 			}
 
 			if sig == linux.SIGSEGV && t.tg.sigsegvLockCount.Load() != 0 {

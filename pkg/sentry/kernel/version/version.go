@@ -1,4 +1,4 @@
-// Copyright 2018 The gVisor Authors.
+// Copyright 2026 The gVisor Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build go1.25
+// Package version holds the kernel versioning information.
+package version
 
-#include "textflag.h"
+const (
+	// LinuxSysname is the OS name advertised by gVisor.
+	LinuxSysname = "Linux"
 
-#define M_OFFSET       48 // +checkoffset runtime g.m
-#define PROCID_OFFSET  64 // +checkoffset runtime m.procid
+	// LinuxRelease is the Linux release version number advertised by gVisor.
+	LinuxRelease = "4.4.0"
 
-TEXT ·Current(SB),NOSPLIT|NOFRAME,$0-8
-	// procid is in getg().m.procid.
-	MOVQ TLS, AX
-	MOVQ 0(AX)(TLS*1), AX
-	MOVQ M_OFFSET(AX), AX // gp.m
-	MOVQ PROCID_OFFSET(AX), AX // mp.procid
-	MOVQ AX, ret+0(FP)
-	RET
+	// LinuxVersion is the version info advertised by gVisor.
+	LinuxVersion = "#1 SMP Sun Jan 10 15:06:54 PST 2016"
+)

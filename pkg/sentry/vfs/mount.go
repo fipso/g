@@ -650,7 +650,7 @@ func (vfs *VirtualFilesystem) UmountAt(ctx context.Context, creds *auth.Credenti
 	// Force unmounting specifically requires CAP_SYS_ADMIN in the root user
 	// namespace, and not in the owner user namespace for the target mount. See
 	// fs/namespace.c:SYSCALL_DEFINE2(umount, ...)
-	if opts.Flags&linux.MNT_FORCE != 0 && creds.HasCapabilityIn(linux.CAP_SYS_ADMIN, creds.UserNamespace.Root()) {
+	if opts.Flags&linux.MNT_FORCE != 0 && creds.HasRootCapability(linux.CAP_SYS_ADMIN) {
 		return linuxerr.EPERM
 	}
 	vd, err := vfs.getMountpoint(ctx, creds, pop)
@@ -1622,4 +1622,20 @@ func (vfs *VirtualFilesystem) generateOptionalTags(ctx context.Context, mnt *Mou
 		}
 	}
 	return optionalSb.String()
+}
+
+// GetAllMounts returns a slice containing every Mount in vfs, regardless of
+// namespace. A reference is held on each returned Mount, which must be dropped
+// by the caller when no longer needed.
+func (vfs *VirtualFilesystem) GetAllMounts(ctx context.Context) []*Mount {
+	var mnts []*Mount
+	vfs.lockMounts()
+	defer vfs.unlockMounts(ctx)
+	for mnt := range vfs.mounts.Range {
+		if !mnt.tryIncMountedRef() {
+			continue
+		}
+		mnts = append(mnts, mnt)
+	}
+	return mnts
 }

@@ -185,6 +185,34 @@ func (i *implStatFS) afterLoad(context.Context) {}
 func (i *implStatFS) StateLoad(ctx context.Context, stateSourceObject state.Source) {
 }
 
+func (s *maxKeySize) StateTypeName() string {
+	return "pkg/sentry/fsimpl/proc.maxKeySize"
+}
+
+func (s *maxKeySize) StateFields() []string {
+	return []string{
+		"DynamicBytesFile",
+		"maxKeys",
+	}
+}
+
+func (s *maxKeySize) beforeSave() {}
+
+// +checklocksignore
+func (s *maxKeySize) StateSave(stateSinkObject state.Sink) {
+	s.beforeSave()
+	stateSinkObject.Save(0, &s.DynamicBytesFile)
+	stateSinkObject.Save(1, &s.maxKeys)
+}
+
+func (s *maxKeySize) afterLoad(context.Context) {}
+
+// +checklocksignore
+func (s *maxKeySize) StateLoad(ctx context.Context, stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &s.DynamicBytesFile)
+	stateSourceObject.Load(1, &s.maxKeys)
+}
+
 func (i *subtasksInode) StateTypeName() string {
 	return "pkg/sentry/fsimpl/proc.subtasksInode"
 }
@@ -635,8 +663,7 @@ func (d *auxvData) StateTypeName() string {
 
 func (d *auxvData) StateFields() []string {
 	return []string{
-		"DynamicBytesFile",
-		"task",
+		"mm",
 	}
 }
 
@@ -645,47 +672,67 @@ func (d *auxvData) beforeSave() {}
 // +checklocksignore
 func (d *auxvData) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
-	stateSinkObject.Save(0, &d.DynamicBytesFile)
-	stateSinkObject.Save(1, &d.task)
+	stateSinkObject.Save(0, &d.mm)
 }
 
 func (d *auxvData) afterLoad(context.Context) {}
 
 // +checklocksignore
 func (d *auxvData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
-	stateSourceObject.Load(0, &d.DynamicBytesFile)
-	stateSourceObject.Load(1, &d.task)
+	stateSourceObject.Load(0, &d.mm)
 }
 
-func (d *metadataData) StateTypeName() string {
-	return "pkg/sentry/fsimpl/proc.metadataData"
+func (d *cmdlineData) StateTypeName() string {
+	return "pkg/sentry/fsimpl/proc.cmdlineData"
 }
 
-func (d *metadataData) StateFields() []string {
+func (d *cmdlineData) StateFields() []string {
 	return []string{
 		"DynamicBytesFile",
 		"task",
-		"metaType",
 	}
 }
 
-func (d *metadataData) beforeSave() {}
+func (d *cmdlineData) beforeSave() {}
 
 // +checklocksignore
-func (d *metadataData) StateSave(stateSinkObject state.Sink) {
+func (d *cmdlineData) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
 	stateSinkObject.Save(0, &d.DynamicBytesFile)
 	stateSinkObject.Save(1, &d.task)
-	stateSinkObject.Save(2, &d.metaType)
 }
 
-func (d *metadataData) afterLoad(context.Context) {}
+func (d *cmdlineData) afterLoad(context.Context) {}
 
 // +checklocksignore
-func (d *metadataData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
+func (d *cmdlineData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
 	stateSourceObject.Load(0, &d.DynamicBytesFile)
 	stateSourceObject.Load(1, &d.task)
-	stateSourceObject.Load(2, &d.metaType)
+}
+
+func (d *environData) StateTypeName() string {
+	return "pkg/sentry/fsimpl/proc.environData"
+}
+
+func (d *environData) StateFields() []string {
+	return []string{
+		"mm",
+	}
+}
+
+func (d *environData) beforeSave() {}
+
+// +checklocksignore
+func (d *environData) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.mm)
+}
+
+func (d *environData) afterLoad(context.Context) {}
+
+// +checklocksignore
+func (d *environData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.mm)
 }
 
 func (i *commInode) StateTypeName() string {
@@ -895,14 +942,44 @@ func (d *limitsData) StateLoad(ctx context.Context, stateSourceObject state.Sour
 	stateSourceObject.Load(1, &d.task)
 }
 
+func (f *mmFile) StateTypeName() string {
+	return "pkg/sentry/fsimpl/proc.mmFile"
+}
+
+func (f *mmFile) StateFields() []string {
+	return []string{
+		"DynamicBytesFile",
+		"ftype",
+		"task",
+	}
+}
+
+func (f *mmFile) beforeSave() {}
+
+// +checklocksignore
+func (f *mmFile) StateSave(stateSinkObject state.Sink) {
+	f.beforeSave()
+	stateSinkObject.Save(0, &f.DynamicBytesFile)
+	stateSinkObject.Save(1, &f.ftype)
+	stateSinkObject.Save(2, &f.task)
+}
+
+func (f *mmFile) afterLoad(context.Context) {}
+
+// +checklocksignore
+func (f *mmFile) StateLoad(ctx context.Context, stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &f.DynamicBytesFile)
+	stateSourceObject.Load(1, &f.ftype)
+	stateSourceObject.Load(2, &f.task)
+}
+
 func (d *mapsData) StateTypeName() string {
 	return "pkg/sentry/fsimpl/proc.mapsData"
 }
 
 func (d *mapsData) StateFields() []string {
 	return []string{
-		"DynamicBytesFile",
-		"task",
+		"mm",
 	}
 }
 
@@ -911,16 +988,14 @@ func (d *mapsData) beforeSave() {}
 // +checklocksignore
 func (d *mapsData) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
-	stateSinkObject.Save(0, &d.DynamicBytesFile)
-	stateSinkObject.Save(1, &d.task)
+	stateSinkObject.Save(0, &d.mm)
 }
 
 func (d *mapsData) afterLoad(context.Context) {}
 
 // +checklocksignore
 func (d *mapsData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
-	stateSourceObject.Load(0, &d.DynamicBytesFile)
-	stateSourceObject.Load(1, &d.task)
+	stateSourceObject.Load(0, &d.mm)
 }
 
 func (d *smapsData) StateTypeName() string {
@@ -929,8 +1004,7 @@ func (d *smapsData) StateTypeName() string {
 
 func (d *smapsData) StateFields() []string {
 	return []string{
-		"DynamicBytesFile",
-		"task",
+		"mm",
 	}
 }
 
@@ -939,16 +1013,14 @@ func (d *smapsData) beforeSave() {}
 // +checklocksignore
 func (d *smapsData) StateSave(stateSinkObject state.Sink) {
 	d.beforeSave()
-	stateSinkObject.Save(0, &d.DynamicBytesFile)
-	stateSinkObject.Save(1, &d.task)
+	stateSinkObject.Save(0, &d.mm)
 }
 
 func (d *smapsData) afterLoad(context.Context) {}
 
 // +checklocksignore
 func (d *smapsData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
-	stateSourceObject.Load(0, &d.DynamicBytesFile)
-	stateSourceObject.Load(1, &d.task)
+	stateSourceObject.Load(0, &d.mm)
 }
 
 func (s *taskStatData) StateTypeName() string {
@@ -2345,6 +2417,31 @@ func (c *cmdLineData) StateLoad(ctx context.Context, stateSourceObject state.Sou
 	stateSourceObject.Load(0, &c.dynamicBytesFileSetAttr)
 }
 
+func (d *devicesData) StateTypeName() string {
+	return "pkg/sentry/fsimpl/proc.devicesData"
+}
+
+func (d *devicesData) StateFields() []string {
+	return []string{
+		"dynamicBytesFileSetAttr",
+	}
+}
+
+func (d *devicesData) beforeSave() {}
+
+// +checklocksignore
+func (d *devicesData) StateSave(stateSinkObject state.Sink) {
+	d.beforeSave()
+	stateSinkObject.Save(0, &d.dynamicBytesFileSetAttr)
+}
+
+func (d *devicesData) afterLoad(context.Context) {}
+
+// +checklocksignore
+func (d *devicesData) StateLoad(ctx context.Context, stateSourceObject state.Source) {
+	stateSourceObject.Load(0, &d.dynamicBytesFileSetAttr)
+}
+
 func (s *sentryMeminfoData) StateTypeName() string {
 	return "pkg/sentry/fsimpl/proc.sentryMeminfoData"
 }
@@ -2680,6 +2777,7 @@ func init() {
 	state.Register((*staticFile)(nil))
 	state.Register((*InternalData)(nil))
 	state.Register((*implStatFS)(nil))
+	state.Register((*maxKeySize)(nil))
 	state.Register((*subtasksInode)(nil))
 	state.Register((*subtasksFD)(nil))
 	state.Register((*subtasksInodeRefs)(nil))
@@ -2691,13 +2789,15 @@ func init() {
 	state.Register((*fdInfoDirInode)(nil))
 	state.Register((*fdInfoData)(nil))
 	state.Register((*auxvData)(nil))
-	state.Register((*metadataData)(nil))
+	state.Register((*cmdlineData)(nil))
+	state.Register((*environData)(nil))
 	state.Register((*commInode)(nil))
 	state.Register((*commData)(nil))
 	state.Register((*idMapData)(nil))
 	state.Register((*memInode)(nil))
 	state.Register((*memFD)(nil))
 	state.Register((*limitsData)(nil))
+	state.Register((*mmFile)(nil))
 	state.Register((*mapsData)(nil))
 	state.Register((*smapsData)(nil))
 	state.Register((*taskStatData)(nil))
@@ -2742,6 +2842,7 @@ func init() {
 	state.Register((*filesystemsData)(nil))
 	state.Register((*cgroupsData)(nil))
 	state.Register((*cmdLineData)(nil))
+	state.Register((*devicesData)(nil))
 	state.Register((*sentryMeminfoData)(nil))
 	state.Register((*tasksInodeRefs)(nil))
 	state.Register((*tcpMemDir)(nil))

@@ -49,6 +49,7 @@ import (
 	"gvisor.dev/gvisor/pkg/devutil"
 	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/eventchannel"
+	"gvisor.dev/gvisor/pkg/fdnotifier"
 	"gvisor.dev/gvisor/pkg/fspath"
 	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/refs"
@@ -72,7 +73,6 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/pgalloc"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netlink/port"
-	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/state/stateio"
 	sentrytime "gvisor.dev/gvisor/pkg/sentry/time"
 	"gvisor.dev/gvisor/pkg/sentry/unimpl"
@@ -102,9 +102,7 @@ func (uc *UserCounters) incRLimitNProc(ctx context.Context) error {
 	lim := limits.FromContext(ctx).Get(limits.ProcessCount)
 	creds := auth.CredentialsFromContext(ctx)
 	nproc := uc.rlimitNProc.Add(1)
-	if nproc > lim.Cur &&
-		!creds.HasCapability(linux.CAP_SYS_ADMIN) &&
-		!creds.HasCapability(linux.CAP_SYS_RESOURCE) {
+	if nproc > lim.Cur && !creds.HasRootCapability(linux.CAP_SYS_ADMIN) && !creds.HasRootCapability(linux.CAP_SYS_RESOURCE) {
 		uc.rlimitNProc.Add(^uint64(0))
 		return linuxerr.EAGAIN
 	}
@@ -388,9 +386,6 @@ type Kernel struct {
 	// when checkpoint/restore are done. It's protected by checkpointMu.
 	checkpointGen CheckpointGeneration
 
-	// UnixSocketOpts stores configuration options for management of unix sockets.
-	UnixSocketOpts transport.UnixSocketOpts
-
 	// SaveRestoreExecConfig stores configuration options for the save/restore
 	// exec binary.
 	SaveRestoreExecConfig *SaveRestoreExecConfig
@@ -401,6 +396,9 @@ type Kernel struct {
 
 	// AllowSUID determines if the SUID/SGID bits are honored during execve.
 	AllowSUID bool
+
+	// MaxKeySetSize is the maximum number of keys in a key set.
+	MaxKeySetSize atomicbitops.Int32
 }
 
 // InitKernelArgs holds arguments to Init.
@@ -453,9 +451,6 @@ type InitKernelArgs struct {
 	// used by processes.  If it is zero, the limit will be set to
 	// unlimited.
 	MaxFDLimit int32
-
-	// UnixSocketOpts contains configuration options for unix sockets.
-	UnixSocketOpts transport.UnixSocketOpts
 }
 
 // Init initialize the Kernel with no tasks.
@@ -490,6 +485,11 @@ func (k *Kernel) Init(args InitKernelArgs) error {
 	k.cpuClockTickerWakeCh = make(chan struct{}, 1)
 	k.cpuClockTickerStopCond.L = &k.runningTasksMu
 	k.applicationCores = args.ApplicationCores
+	if args.UseHostCores && k.HasCPUNumbers() {
+		args.UseHostCores = false
+		log.Infof("UseHostCores enabled but the platform implements HasCPUNumbers(): setting UseHostCores to false")
+	}
+
 	if args.UseHostCores {
 		k.useHostCores = true
 		maxCPU, err := hostcpu.MaxPossibleCPU()
@@ -502,6 +502,16 @@ func (k *Kernel) Init(args InitKernelArgs) error {
 			k.applicationCores = minAppCores
 		}
 	}
+
+	if k.HasCPUNumbers() {
+		numCPUs := uint(k.NumCPUs())
+		if k.applicationCores < numCPUs {
+			log.Infof("ApplicationCores is less than NumCPUs: %d < %d", k.applicationCores, numCPUs)
+			log.Infof("Setting applicationCores to NumCPUs: %d", numCPUs)
+			k.applicationCores = numCPUs
+		}
+	}
+
 	k.extraAuxv = args.ExtraAuxv
 	k.vdso = args.Vdso
 	k.vdsoParams = args.VdsoParams
@@ -580,7 +590,7 @@ func (k *Kernel) Init(args InitKernelArgs) error {
 	k.sockets = make(map[*vfs.FileDescription]*SocketRecord)
 
 	k.cgroupRegistry = newCgroupRegistry()
-	k.UnixSocketOpts = args.UnixSocketOpts
+	k.MaxKeySetSize = atomicbitops.FromInt32(auth.MaxSetSize)
 	return nil
 }
 
@@ -631,6 +641,10 @@ func (k *Kernel) SaveTo(ctx context.Context, stateFile, pagesMetadata io.WriteCl
 	// Do not allow other Kernel methods to affect it while it's being saved.
 	k.extMu.Lock()
 	defer k.extMu.Unlock()
+
+	// Suspend fdnotifier notifications.
+	fdnotifier.Pause()
+	defer fdnotifier.Resume()
 
 	// Stop time.
 	k.pauseTimeLocked(ctx)
@@ -868,6 +882,10 @@ func (k *Kernel) LoadFrom(ctx context.Context, r io.Reader, asyncMFLoader *Async
 	if err := k.featureSet.CheckHostCompatible(); err != nil {
 		return err
 	}
+
+	// Suspend fdnotifier notifications.
+	fdnotifier.Pause()
+	defer fdnotifier.Resume()
 
 	// Load the kernel state.
 	kernelStart := time.Now()

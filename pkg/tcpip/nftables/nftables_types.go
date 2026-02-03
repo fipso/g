@@ -47,6 +47,7 @@ import (
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/atomicbitops"
+	"gvisor.dev/gvisor/pkg/marshal/primitive"
 	"gvisor.dev/gvisor/pkg/rand"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netlink/nlmsg"
 	"gvisor.dev/gvisor/pkg/syserr"
@@ -689,6 +690,10 @@ type ExprInfo struct {
 
 // operation represents a single operation in a rule.
 type operation interface {
+	// GetExprName returns the name of the expression.
+	GetExprName() string
+	// Dump dumps the parameters.
+	Dump() ([]byte, *syserr.AnnotatedError)
 
 	// evaluate evaluates the operation on the given packet and register set,
 	// changing the register set and possibly the packet in place. We pass the
@@ -709,6 +714,7 @@ var (
 	_ operation = (*route)(nil)
 	_ operation = (*byteorder)(nil)
 	_ operation = (*metaLoad)(nil)
+	_ operation = (*metaSet)(nil)
 )
 
 //
@@ -750,6 +756,8 @@ type registerData interface {
 	// operation evaluation and the data type/register compatibility should have
 	// been checked during the operation init.
 	storeData(regs *registerSet, reg uint8)
+
+	Dump() ([]byte, *syserr.AnnotatedError)
 }
 
 // verdictData represents a verdict as data to be stored in a register.
@@ -791,6 +799,17 @@ func (rd verdictData) storeData(regs *registerSet, reg uint8) {
 		panic(err)
 	}
 	regs.verdict = rd.data
+}
+
+func (rd verdictData) Dump() ([]byte, *syserr.AnnotatedError) {
+	nestedAttr := nlmsg.NestedAttr{}
+	nestedAttr.PutAttr(linux.NFTA_VERDICT_CODE, nlmsg.PutU32(uint32(rd.data.Code)))
+	if int32(rd.data.Code) == linux.NFT_JUMP || int32(rd.data.Code) == linux.NFT_GOTO {
+		nestedAttr.PutAttrString(linux.NFTA_VERDICT_CHAIN, rd.data.ChainName)
+	}
+	m := &nlmsg.Message{}
+	m.PutNestedAttr(linux.NFTA_DATA_VERDICT, nestedAttr)
+	return m.Buffer(), nil
 }
 
 // bytesData represents <= 16 bytes of data to be stored in a register.
@@ -862,6 +881,12 @@ func (rd bytesData) storeData(regs *registerSet, reg uint8) {
 		panic(err)
 	}
 	copy(getRegisterBuffer(regs, reg), rd.data)
+}
+
+func (rd bytesData) Dump() ([]byte, *syserr.AnnotatedError) {
+	m := &nlmsg.Message{}
+	m.PutAttr(linux.NFTA_DATA_VALUE, primitive.AsByteSlice(rd.data))
+	return m.Buffer(), nil
 }
 
 // registerSet represents the set of registers supported by the kernel.
@@ -1029,8 +1054,8 @@ func nftValidateRegister(reg uint32, regType uint32, data registerData) (uint8, 
 		}
 
 		// TODO - b/434244017: Add insertion-time validation of chains for jump and goto verdicts.
-		if int32(verdictData.data.Code) == linux.NFT_GOTO || int32(verdictData.data.Code) == linux.NFT_JUMP {
-			return 0, syserr.NewAnnotatedError(syserr.ErrNotSupported, fmt.Sprintf("Nftables: Verdicts with jump or goto codes are not yet supported"))
+		if int32(verdictData.data.Code) == linux.NFT_GOTO {
+			return 0, syserr.NewAnnotatedError(syserr.ErrNotSupported, fmt.Sprintf("Nftables: Verdicts with goto codes are not yet supported"))
 		}
 	default:
 		if regType != linux.NFT_DATA_VALUE {
@@ -1110,31 +1135,6 @@ func validateVerdictData(tab *Table, bytes nlmsg.AttrsView) (stack.NFVerdict, *s
 	// Would need to ensure that the chain cannot be removed while it is being pointed to (using use field).
 	v.Code = verdictCode
 	return v, nil
-}
-
-// HasAttr returns whether the given attribute key is present in the attribute map.
-func HasAttr(attrName uint16, attrs map[uint16]nlmsg.BytesView) bool {
-	_, ok := attrs[attrName]
-	return ok
-}
-
-// NfParse parses the data bytes, clearing the nested attribute bit if present.
-// For nested attributes, Linux supports these attributes having the bit
-// set or unset. It is cleared here for consistency.
-func NfParse(data nlmsg.AttrsView) (map[uint16]nlmsg.BytesView, bool) {
-	attrs, ok := data.Parse()
-	if !ok {
-		return nil, ok
-	}
-
-	newAttrs := make(map[uint16]nlmsg.BytesView)
-	// TODO - b/421437663: If any validation has to be done on nested attributes,
-	// it should be done here.
-	for attr, attrData := range attrs {
-		newAttrs[attr & ^linux.NLA_F_NESTED] = attrData
-	}
-
-	return newAttrs, ok
 }
 
 // deepCopyRule returns a deep copy of the Rule struct.

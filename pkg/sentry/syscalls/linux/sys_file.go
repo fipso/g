@@ -366,7 +366,7 @@ func Fchdir(t *kernel.Task, sysno uintptr, args arch.SyscallArguments) (uintptr,
 func Chroot(t *kernel.Task, sysno uintptr, args arch.SyscallArguments) (uintptr, *kernel.SyscallControl, error) {
 	addr := args[0].Pointer()
 
-	if !t.HasCapability(linux.CAP_SYS_CHROOT) {
+	if !t.HasSelfCapability(linux.CAP_SYS_CHROOT) {
 		return 0, nil, linuxerr.EPERM
 	}
 
@@ -396,7 +396,7 @@ func PivotRoot(t *kernel.Task, sysno uintptr, args arch.SyscallArguments) (uintp
 	addr1 := args[0].Pointer()
 	addr2 := args[1].Pointer()
 
-	if !t.HasCapability(linux.CAP_SYS_ADMIN) {
+	if !t.HasCapabilityIn(linux.CAP_SYS_ADMIN, t.MountNamespace().Owner) {
 		return 0, nil, linuxerr.EPERM
 	}
 
@@ -1030,15 +1030,17 @@ func linkat(t *kernel.Task, olddirfd int32, oldpathAddr hostarch.Addr, newdirfd 
 	if flags&^(linux.AT_EMPTY_PATH|linux.AT_SYMLINK_FOLLOW) != 0 {
 		return linuxerr.EINVAL
 	}
-	if flags&linux.AT_EMPTY_PATH != 0 && !t.HasCapability(linux.CAP_DAC_READ_SEARCH) {
-		return linuxerr.ENOENT
-	}
 
 	oldpath, err := copyInPath(t, oldpathAddr)
 	if err != nil {
 		return err
 	}
-	oldtpop, err := getTaskPathOperation(t, olddirfd, oldpath, shouldAllowEmptyPath(flags&linux.AT_EMPTY_PATH != 0), shouldFollowFinalSymlink(flags&linux.AT_SYMLINK_FOLLOW != 0))
+
+	emptyPathCheck := disallowEmptyPath
+	if flags&linux.AT_EMPTY_PATH != 0 {
+		emptyPathCheck = allowEmptyPathWithCredsCheck
+	}
+	oldtpop, err := getTaskPathOperation(t, olddirfd, oldpath, emptyPathCheck, shouldFollowFinalSymlink(flags&linux.AT_SYMLINK_FOLLOW != 0))
 	if err != nil {
 		return err
 	}
@@ -1142,12 +1144,12 @@ func Unlinkat(t *kernel.Task, sysno uintptr, args arch.SyscallArguments) (uintpt
 	return 0, nil, unlinkat(t, dirfd, pathAddr)
 }
 
-func setstatat(t *kernel.Task, dirfd int32, path fspath.Path, shouldAllowEmptyPath shouldAllowEmptyPath, shouldFollowFinalSymlink shouldFollowFinalSymlink, opts *vfs.SetStatOptions) error {
+func setstatat(t *kernel.Task, dirfd int32, path fspath.Path, emptyPathCheck shouldAllowEmptyPathType, shouldFollowFinalSymlink shouldFollowFinalSymlink, opts *vfs.SetStatOptions) error {
 	root := t.FSContext().RootDirectory()
 	defer root.DecRef(t)
 	start := root
 	if !path.Absolute {
-		if !path.HasComponents() && !bool(shouldAllowEmptyPath) {
+		if !path.HasComponents() && !emptyPathCheck.allow() {
 			return linuxerr.ENOENT
 		}
 		if dirfd == linux.AT_FDCWD {

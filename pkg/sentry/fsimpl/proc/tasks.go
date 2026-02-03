@@ -80,6 +80,7 @@ func (fs *filesystem) newTasksInode(ctx context.Context, k *kernel.Kernel, pidns
 	contents := map[string]kernfs.Inode{
 		"cmdline":        fs.newInode(ctx, root, 0444, &cmdLineData{}),
 		"cpuinfo":        fs.newInode(ctx, root, 0444, newStaticFileSetStat(cpuInfoData(k))),
+		"devices":        fs.newInode(ctx, root, 0444, &devicesData{}),
 		"filesystems":    fs.newInode(ctx, root, 0444, &filesystemsData{}),
 		"loadavg":        fs.newInode(ctx, root, 0444, &loadavgData{}),
 		"sys":            fs.newSysDir(ctx, root, k),
@@ -100,6 +101,7 @@ func (fs *filesystem) newTasksInode(ctx context.Context, k *kernel.Kernel, pidns
 	if len(internalData.Cgroups) == 0 {
 		contents["cgroups"] = fs.newInode(ctx, root, 0444, &cgroupsData{})
 	}
+	fs.addNvproxyFiles(ctx, root, k, contents)
 
 	fs.newTasksInodeExtra(ctx, root, internalData, k, contents)
 
@@ -227,7 +229,7 @@ func (i *tasksInode) IterDirents(ctx context.Context, mnt *vfs.Mount, cb vfs.Ite
 
 // Open implements kernfs.Inode.Open.
 func (i *tasksInode) Open(ctx context.Context, rp *vfs.ResolvingPath, d *kernfs.Dentry, opts vfs.OpenOptions) (*vfs.FileDescription, error) {
-	fd, err := kernfs.NewGenericDirectoryFD(rp.Mount(), d, &i.OrderedChildren, &i.locks, &opts, kernfs.GenericDirectoryFDOptions{
+	fd, err := kernfs.NewGenericDirectoryFD(rp.Mount(), d, rp.Credentials(), &i.OrderedChildren, &i.locks, &opts, kernfs.GenericDirectoryFDOptions{
 		SeekEnd: kernfs.SeekEndZero,
 	})
 	if err != nil {

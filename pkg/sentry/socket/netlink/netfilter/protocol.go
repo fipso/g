@@ -26,7 +26,6 @@ import (
 	"gvisor.dev/gvisor/pkg/marshal/primitive"
 	"gvisor.dev/gvisor/pkg/sentry/inet"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
-	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netlink"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netlink/nlmsg"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netstack"
@@ -72,17 +71,16 @@ func (p *Protocol) Receive(ctx context.Context, s *netlink.Socket, buf []byte) *
 		return nil
 	}
 
-	creds := auth.CredentialsFromContext(ctx)
 	// Currently, the kernel is the only valid destination so simply return
 	// the error to the caller.
-	if !creds.HasCapability(linux.CAP_NET_ADMIN) {
-		return syserr.ErrPermissionDenied
+	if !s.NetworkNamespace().HasCapability(ctx, linux.CAP_NET_ADMIN) {
+		return syserr.ErrNotPermittedNet
 	}
 
 	// TODO: b/434785410 - Support batch messages.
 	if hdr.Type == linux.NFNL_MSG_BATCH_BEGIN {
 		ms := nlmsg.NewMessageSet(s.GetPortID(), hdr.Seq)
-		if err := p.receiveBatchMessage(ctx, s, ms, buf); err != nil {
+		if err := p.receiveBatchMessage(ctx, ms, buf); err != nil {
 			log.Debugf("Nftables: Failed to process batch message: %v", err)
 			netlink.DumpErrorMessage(hdr, ms, err.GetError())
 		}
@@ -442,7 +440,7 @@ func (p *Protocol) addChain(attrs map[uint16]nlmsg.BytesView, tab *nftables.Tabl
 			return syserr.NewAnnotatedError(syserr.ErrNotSupported, fmt.Sprintf("Nftables: Chain binding attribute is not supported for chains with a hook"))
 		}
 
-		bcInfo, err = p.chainParseHook(nil, family, nlmsg.AttrsView(hookDataBytes))
+		bcInfo, err = p.chainParseHook(nil, family, nlmsg.AttrsView(hookDataBytes), attrs)
 		if err != nil {
 			return err
 		}
@@ -494,7 +492,7 @@ func (p *Protocol) addChain(attrs map[uint16]nlmsg.BytesView, tab *nftables.Tabl
 
 // chainParseHook parses the hook attributes and returns a complete
 // BaseChainInfo.
-func (p *Protocol) chainParseHook(chain *nftables.Chain, family stack.AddressFamily, hdata nlmsg.AttrsView) (*nftables.BaseChainInfo, *syserr.AnnotatedError) {
+func (p *Protocol) chainParseHook(chain *nftables.Chain, family stack.AddressFamily, hdata nlmsg.AttrsView, attrs map[uint16]nlmsg.BytesView) (*nftables.BaseChainInfo, *syserr.AnnotatedError) {
 	hookAttrs, ok := nftables.NfParse(hdata)
 	if !ok {
 		return nil, syserr.NewAnnotatedError(syserr.ErrInvalidArgument, fmt.Sprintf("Nftables: Failed to parse hook attributes"))
@@ -530,7 +528,7 @@ func (p *Protocol) chainParseHook(chain *nftables.Chain, family stack.AddressFam
 	// All families default to filter type.
 	hookInfo.ChainType = nftables.BaseChainTypeFilter
 
-	if chainTypeBytes, ok := hookAttrs[linux.NFTA_CHAIN_TYPE]; ok {
+	if chainTypeBytes, ok := attrs[linux.NFTA_CHAIN_TYPE]; ok {
 		// TODO - b/434243967: Support base chain types other than filter.
 		switch chainType := chainTypeBytes.String(); chainType {
 		case "filter":
@@ -1088,13 +1086,23 @@ func fillRuleInfo(rule *nftables.Rule, ms *nlmsg.MessageSet) *syserr.AnnotatedEr
 		return syserr.NewAnnotatedError(syserr.ErrNotSupported, "Nftables: Hardware offload chains are not supported")
 	}
 
-	// TODO(b/434244017): Add support for dumping expressions. This means
-	// expanding the nftables operation interface to include dump operations.
-	var exprsData []byte
 	// The NLA_F_NESTED flag is explicitly not set here, for backwards
 	// compatibility with older kernels.
 	// From linux/net/netfilter/nf_tables_api.c: nf_tables_fill_rule_info
-	m.PutAttr(linux.NFTA_RULE_EXPRESSIONS, primitive.AsByteSlice(exprsData))
+	var nestedList nlmsg.NestedAttr
+	for _, op := range rule.GetOperations() {
+		var exprs nlmsg.NestedAttr
+		exprs.PutAttrString(linux.NFTA_EXPR_NAME, op.GetExprName())
+		exprDump, err := op.Dump()
+		if err != nil {
+			return err
+		}
+		if len(exprDump) > 0 {
+			exprs.PutAttr(linux.NFTA_EXPR_DATA, primitive.AsByteSlice(exprDump))
+		}
+		nestedList.PutAttr(linux.NFTA_LIST_ELEM, primitive.AsByteSlice(exprs))
+	}
+	m.PutNestedAttr(linux.NFTA_RULE_EXPRESSIONS, nestedList)
 
 	if rule.HasUserData() {
 		m.PutAttr(linux.NFTA_RULE_USERDATA, primitive.AsByteSlice(rule.GetUserData()))
@@ -1215,7 +1223,7 @@ func (p *Protocol) ProcessMessage(ctx context.Context, s *netlink.Socket, msg *n
 }
 
 // receiveBatchMessage processes a NETFILTER batch message.
-func (p *Protocol) receiveBatchMessage(ctx context.Context, s *netlink.Socket, ms *nlmsg.MessageSet, buf []byte) *syserr.AnnotatedError {
+func (p *Protocol) receiveBatchMessage(ctx context.Context, ms *nlmsg.MessageSet, buf []byte) *syserr.AnnotatedError {
 	// Linux ignores messages that are too small.
 	// From net/netfilter/nfnetlink.c:nfnetlink_rcv_skb_batch
 	if len(buf) < linux.NetlinkMessageHeaderSize+linux.SizeOfNetfilterGenMsg {
@@ -1254,7 +1262,7 @@ func (p *Protocol) receiveBatchMessage(ctx context.Context, s *netlink.Socket, m
 	// The resource ID is a 16-bit value that is stored in network byte order.
 	// We ensure that it is in host byte order before passing it for processing.
 	resID := nlmsg.NetToHostU16(nfGenMsg.ResourceID)
-	if err := p.processBatchMessage(ctx, s, buf, ms, hdr, resID); err != nil {
+	if err := p.processBatchMessage(ctx, buf, ms, hdr, resID); err != nil {
 		log.Debugf("Failed to process batch message: %v", err)
 		netlink.DumpErrorMessage(hdr, ms, err.GetError())
 	}
@@ -1263,7 +1271,7 @@ func (p *Protocol) receiveBatchMessage(ctx context.Context, s *netlink.Socket, m
 }
 
 // processBatchMessage processes a batch message.
-func (p *Protocol) processBatchMessage(ctx context.Context, s *netlink.Socket, buf []byte, ms *nlmsg.MessageSet, batchHdr linux.NetlinkMessageHeader, subsysID uint16) *syserr.AnnotatedError {
+func (p *Protocol) processBatchMessage(ctx context.Context, buf []byte, ms *nlmsg.MessageSet, batchHdr linux.NetlinkMessageHeader, subsysID uint16) *syserr.AnnotatedError {
 	if subsysID >= linux.NFNL_SUBSYS_COUNT {
 		return syserr.NewAnnotatedError(syserr.ErrInvalidArgument, fmt.Sprintf("Nftables: Unknown subsystem id %d", subsysID))
 	}

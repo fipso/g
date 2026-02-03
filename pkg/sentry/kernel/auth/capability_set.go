@@ -31,16 +31,16 @@ var AllCapabilities = CapabilitySetOf(linux.CAP_LAST_CAP+1) - 1
 // CapabilitySetOf returns a CapabilitySet containing only the given
 // capability.
 func CapabilitySetOf(cp linux.Capability) CapabilitySet {
-	return CapabilitySet(bits.MaskOf64(int(cp)))
+	return bits.MaskOf[CapabilitySet](int(cp))
 }
 
 // CapabilitySetOfMany returns a CapabilitySet containing the given capabilities.
 func CapabilitySetOfMany(cps []linux.Capability) CapabilitySet {
-	var cs uint64
+	var cs CapabilitySet
 	for _, cp := range cps {
-		cs |= bits.MaskOf64(int(cp))
+		cs |= bits.MaskOf[CapabilitySet](int(cp))
 	}
-	return CapabilitySet(cs)
+	return cs
 }
 
 // Add adds the given capability to the CapabilitySet.
@@ -93,7 +93,7 @@ func FixupVfsCapDataOnSet(creds *Credentials, value string, kuid KUID, kgid KGID
 	if !creds.HasCapabilityOnFile(linux.CAP_SETFCAP, kuid, kgid) {
 		return "", linuxerr.EPERM
 	}
-	if vfsCaps.IsRevision2() && creds.HasCapabilityIn(linux.CAP_SETFCAP, creds.UserNamespace.Root()) {
+	if vfsCaps.IsRevision2() && creds.HasRootCapability(linux.CAP_SETFCAP) {
 		// The user is privileged, allow the v2 write.
 		return value, nil
 	}
@@ -280,7 +280,7 @@ func ComputeCredsForExec(c *Credentials, f FilePrivileges, filename string,
 	gainedID := (newC.EffectiveKUID != c.RealKUID) || (newC.EffectiveKGID != c.RealKGID)
 	gainedCaps := !newC.PermittedCaps.IsSubsetOf(c.PermittedCaps)
 	if (gainedID || gainedCaps) && (noNewPrivs || stopPrivGain) {
-		if noNewPrivs || !c.HasCapability(linux.CAP_SETUID) {
+		if noNewPrivs || !c.HasSelfCapability(linux.CAP_SETUID) {
 			newC.EffectiveKUID = c.RealKUID
 			newC.EffectiveKGID = c.RealKGID
 		}

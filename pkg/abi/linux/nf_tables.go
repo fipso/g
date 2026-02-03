@@ -336,6 +336,22 @@ const (
 	NFTA_IMMEDIATE_MAX = __NFTA_IMMEDIATE_MAX - 1
 )
 
+// NfTablePayloadAttributes represents the netfilter payload attributes.
+// These correspond to values in include/uapi/linux/netfilter/nf_tables.h.
+const (
+	NFTA_PAYLOAD_UNSPEC uint16 = iota
+	NFTA_PAYLOAD_DREG
+	NFTA_PAYLOAD_BASE
+	NFTA_PAYLOAD_OFFSET
+	NFTA_PAYLOAD_LEN
+	NFTA_PAYLOAD_SREG
+	NFTA_PAYLOAD_CSUM_TYPE
+	NFTA_PAYLOAD_CSUM_OFFSET
+	NFTA_PAYLOAD_CSUM_FLAGS
+	__NFTA_PAYLOAD_MAX
+	NFTA_PAYLOAD_MAX = __NFTA_PAYLOAD_MAX - 1
+)
+
 // Nf table relational operators.
 // Used by the nft comparison operation to compare values in registers.
 // These correspond to enum values in include/uapi/linux/netfilter/nf_tables.h.
@@ -346,6 +362,17 @@ const (
 	NFT_CMP_LTE        // less than or equal to
 	NFT_CMP_GT         // greater than
 	NFT_CMP_GTE        // greater than or equal to
+)
+
+// Nf table cmp expression netlink attributes.
+// These correspond to enum values in include/uapi/linux/netfilter/nf_tables.h.
+const (
+	NFTA_CMP_UNSPEC uint16 = iota
+	NFTA_CMP_SREG
+	NFTA_CMP_OP
+	NFTA_CMP_DATA
+	__NFTA_CMP_MAX
+	NFTA_CMP_MAX = __NFTA_CMP_MAX - 1
 )
 
 // Nf table range operators.
@@ -461,6 +488,28 @@ const (
 	NFT_META_SDIF                 // Slave device interface index
 	NFT_META_SDIFNAME             // Slave device interface name
 	NFT_META_BRI_BROUTE           // Packet br_netfilter_broute bit
+)
+
+// Nf table meta expression netlink attributes
+// These correspond to enum values in include/uapi/linux/netfilter/nf_tables.h.
+const (
+	NFTA_META_UNSPEC = iota
+	NFTA_META_DREG
+	NFTA_META_KEY
+	NFTA_META_SREG
+	__NFTA_META_MAX
+	NFTA_META_MAX = __NFTA_META_MAX - 1
+)
+
+// Nf table counter expression netlink attributes.
+// These correspond to enum values in include/uapi/linux/netfilter/nf_tables.h.
+const (
+	NFTA_COUNTER_UNSPEC = iota
+	NFTA_COUNTER_BYTES
+	NFTA_COUNTER_PACKETS
+	NFTA_COUNTER_PAD
+	__NFTA_COUNTER_MAX
+	NFTA_COUNTER_MAX = __NFTA_COUNTER_MAX - 1
 )
 
 // Nftables Generation Attributes
