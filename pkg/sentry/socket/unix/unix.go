@@ -78,7 +78,7 @@ func NewSockfsFile(t *kernel.Task, ep transport.Endpoint, stype linux.SockType) 
 	defer d.DecRef(t)
 
 	ns := t.GetNetworkNamespace()
-	fd, err := NewFileDescription(ep, stype, linux.O_RDWR, ns, mnt, d, &vfs.FileLocks{})
+	fd, err := NewFileDescription(ep, stype, linux.O_RDWR, ns, mnt, d, &vfs.FileLocks{}, t.Credentials())
 	if err != nil {
 		ns.DecRef(t)
 		return nil, syserr.FromError(err)
@@ -88,7 +88,7 @@ func NewSockfsFile(t *kernel.Task, ep transport.Endpoint, stype linux.SockType) 
 
 // NewFileDescription creates and returns a socket file description
 // corresponding to the given mount and dentry.
-func NewFileDescription(ep transport.Endpoint, stype linux.SockType, flags uint32, ns *inet.Namespace, mnt *vfs.Mount, d *vfs.Dentry, locks *vfs.FileLocks) (*vfs.FileDescription, error) {
+func NewFileDescription(ep transport.Endpoint, stype linux.SockType, flags uint32, ns *inet.Namespace, mnt *vfs.Mount, d *vfs.Dentry, locks *vfs.FileLocks, creds *auth.Credentials) (*vfs.FileDescription, error) {
 	// You can create AF_UNIX, SOCK_RAW sockets. They're the same as
 	// SOCK_DGRAM and don't require CAP_NET_RAW.
 	if stype == linux.SOCK_RAW {
@@ -103,7 +103,7 @@ func NewFileDescription(ep transport.Endpoint, stype linux.SockType, flags uint3
 	sock.InitRefs()
 	sock.LockFD.Init(locks)
 	vfsfd := &sock.vfsfd
-	if err := vfsfd.Init(sock, flags, mnt, d, &vfs.FileDescriptionOptions{
+	if err := vfsfd.Init(sock, flags, creds, mnt, d, &vfs.FileDescriptionOptions{
 		DenyPRead:         true,
 		DenyPWrite:        true,
 		UseDentryMetadata: true,
@@ -151,7 +151,7 @@ func (s *Socket) blockingAccept(t *kernel.Task, peerAddr *transport.Address) (tr
 	// Try to accept the connection; if it fails, then wait until we get a
 	// notification.
 	for {
-		if ep, err := s.ep.Accept(t, peerAddr, t.Kernel().UnixSocketOpts); err != syserr.ErrWouldBlock {
+		if ep, err := s.ep.Accept(t, peerAddr); err != syserr.ErrWouldBlock {
 			return ep, err
 		}
 
@@ -168,7 +168,7 @@ func (s *Socket) Accept(t *kernel.Task, peerRequested bool, flags int, blocking 
 	if peerRequested {
 		peerAddr = &transport.Address{}
 	}
-	ep, err := s.ep.Accept(t, peerAddr, t.Kernel().UnixSocketOpts)
+	ep, err := s.ep.Accept(t, peerAddr)
 	if err != nil {
 		if err != syserr.ErrWouldBlock || !blocking {
 			return 0, nil, 0, err
@@ -619,7 +619,7 @@ func (s *Socket) Connect(t *kernel.Task, sockaddr []byte, blocking bool) *syserr
 	s.ep.SetPeerCreds(control.MakeCreds(t))
 
 	// Connect the server endpoint.
-	err = s.ep.Connect(t, ep, t.Kernel().UnixSocketOpts)
+	err = s.ep.Connect(t, ep)
 
 	if err == syserr.ErrWrongProtocolForSocket {
 		// Linux for abstract sockets returns ErrConnectionRefused

@@ -43,6 +43,11 @@ import (
 //  5. If adding an enum, follow the same pattern as FileAccessType
 //  6. Evaluate if the flag can be changed with OCI annotations. See
 //     overrideAllowlist for more details
+//
+// Follow these steps to deprecate a flag:
+//  1. Add a field to Config with the prefix "DEPRECATED", or remove the field
+//     if it is no longer needed at all.
+//  2. Add the flag to flags_graveyard.go and remove it from flags.go.
 type Config struct {
 	// RootDir is the runtime root directory.
 	RootDir string `flag:"root"`
@@ -128,7 +133,7 @@ type Config struct {
 	EnableRaw bool `flag:"net-raw"`
 
 	// AllowPacketEndpointWrite enables write operations on packet endpoints.
-	AllowPacketEndpointWrite bool `flag:"TESTONLY-allow-packet-endpoint-write"`
+	AllowPacketEndpointWrite bool `flag:"allow-packet-socket-write"`
 
 	// HostGSO indicates that host segmentation offload is enabled.
 	HostGSO bool `flag:"gso"`
@@ -305,9 +310,6 @@ type Config struct {
 	// take during pod creation.
 	PodInitConfig string `flag:"pod-init-config"`
 
-	// Use pools to manage buffer memory instead of heap.
-	BufferPooling bool `flag:"buffer-pooling"`
-
 	// XDP controls Whether and how to use XDP.
 	XDP XDP `flag:"EXPERIMENTAL-xdp"`
 
@@ -418,6 +420,10 @@ type Config struct {
 	// AllowSUID causes ID elevation to be allowed when execving into executables
 	// with the SUID/SGID bits set.
 	AllowSUID bool `flag:"allow-suid"`
+
+	// UseCPUNums causes the sentry to use KVM CPU numbers as CPU numbers in the
+	// sentry. This is necessary to support features like rseq.
+	UseCPUNums bool `flag:"kvm-use-cpu-nums"`
 }
 
 func (c *Config) validate() error {
@@ -469,6 +475,7 @@ func (c *Config) Log() {
 	log.Infof("RootDir: %s", c.RootDir)
 	log.Infof("FileAccess: %v / Directfs: %t / Overlay: %v", c.FileAccess, c.DirectFS, c.GetOverlay2())
 	log.Infof("Network: %v", c.Network)
+	log.Infof("UseCPUNums: %t", c.UseCPUNums)
 	if c.Debug || c.Strace {
 		log.Infof("Debug: %t. Strace: %t, max size: %d, syscalls: %s", c.Debug, c.Strace, c.StraceLogSize, c.StraceSyscalls)
 	}

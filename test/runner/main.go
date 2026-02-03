@@ -73,6 +73,7 @@ var (
 	saveResume       = flag.Bool("save-resume", false, "enables save resume")
 	netstackSR       = flag.Bool("netstack-sr", false, "enables netstack s/r")
 	nftables         = flag.Bool("nftables", false, "enables nftables")
+	kvmUseCPUNums    = flag.Bool("kvm-use-cpu-nums", false, "use cpu numbers in kvm platform")
 )
 
 const (
@@ -320,7 +321,7 @@ func runRunsc(tc *gtest.TestCase, spec *specs.Spec) error {
 		"-network", *network,
 		"-log-format=text",
 		"-TESTONLY-unsafe-nonroot=true",
-		"-TESTONLY-allow-packet-endpoint-write=true",
+		"-allow-packet-socket-write=true",
 		fmt.Sprintf("-panic-signal=%d", unix.SIGTERM),
 		fmt.Sprintf("-iouring=%t", *ioUring),
 		"-watchdog-action=panic",
@@ -371,6 +372,11 @@ func runRunsc(tc *gtest.TestCase, spec *specs.Spec) error {
 		args = append(args, "-directfs")
 	} else {
 		args = append(args, "-directfs=false")
+	}
+	if *kvmUseCPUNums {
+		args = append(args, "-kvm-use-cpu-nums")
+	} else {
+		args = append(args, "-kvm-use-cpu-nums=false")
 	}
 
 	testLogDir := ""
@@ -722,6 +728,10 @@ func isWarning(line string) bool {
 
 	// Caused by properties of the host that runsc doesn't necessarily control.
 	case strings.Contains(line, "Host limit is lower than recommended"):
+
+	// TODO(gvisor.dev/issue/11649): Systrap needs to roll back created
+	// patches for traced procs.
+	case strings.Contains(line, "LIKELY ERROR: Attached tracer to process with patched syscalls"):
 
 	case *save:
 		// Ignore these warnings for S/R tests as we try to delete the sandbox

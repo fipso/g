@@ -9,6 +9,7 @@ go_library(
     name = "runsc",
     srcs = [
         "api.go",
+        "container.go",
         "debug.go",
         "epoll.go",
         "oom_v2.go",
@@ -24,7 +25,6 @@ go_library(
         "//pkg/shim/v1/proc",
         "//pkg/shim/v1/runsccmd",
         "//pkg/shim/v1/runtimeoptions",
-        "//pkg/shim/v1/runtimeoptions/v14",
         "//pkg/shim/v1/utils",
         "//runsc/specutils",
         "@com_github_burntsushi_toml//:go_default_library",

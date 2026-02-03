@@ -60,8 +60,8 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/socket/plugin"
 	"gvisor.dev/gvisor/pkg/sentry/socket/unix/monitor"
 	"gvisor.dev/gvisor/pkg/tcpip/stack/netmonitor"
-	"gvisor.dev/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.dev/gvisor/pkg/sentry/time"
+	"gvisor.dev/gvisor/pkg/sentry/uniqueid"
 	"gvisor.dev/gvisor/pkg/sentry/usage"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
 	"gvisor.dev/gvisor/pkg/sentry/watchdog"
@@ -152,8 +152,11 @@ type containerInfo struct {
 	// for bind mounts in Spec.Mounts (in the same order).
 	goferMountConfs []GoferMountConf
 
-	// nvidiaUVMDevMajor is the device major number used for nvidia-uvm.
-	nvidiaUVMDevMajor uint32
+	// nvidiaHostSettings holds information on the Nvidia GPU driver.
+	nvidiaHostSettings *nvconf.HostSettings
+
+	// nvproxyDevInfo holds information on nvproxy devices.
+	nvproxyDevInfo *nvproxy.DeviceInfo
 
 	// applicationCores is the number of CPU cores gVisor reports to user
 	// applications.
@@ -162,6 +165,9 @@ type containerInfo struct {
 	// rootfsUpperTarFD is the file descriptor to the tar file containing the rootfs
 	// upper layer changes.
 	rootfsUpperTarFD *fd.FD
+
+	// useCPUNums indicates whether to use platform assigned CPU numbers as CPU numbers in the sentry.
+	useCPUNums bool
 }
 
 type loaderState int
@@ -169,14 +175,17 @@ type loaderState int
 const (
 	// created indicates that the Loader has been created, but not started yet.
 	created loaderState = iota
-	// started indicates that the Loader has been started.
+	// started indicates that the Loader has been started. This means that the
+	// root container is running. Subsequent containers may still be unstarted.
 	started
 	// restoringUnstarted indicates that the Loader has been created and is
 	// restoring containers, but not started yet.
 	restoringUnstarted
-	// restoringStarted indicates that the Loader has been created and started,
-	// while restore continues in the background.
+	// restoringStarted indicates that the Loader has been created and started
+	// along with all containers, while restore continues in the background.
 	restoringStarted
+	// restoreFailed indicates that the Loader has failed to restore.
+	restoreFailed
 	// restored indicates that the Loader has been fully restored.
 	restored
 )
@@ -192,6 +201,8 @@ func (s loaderState) String() string {
 		return "restoringUnstarted"
 	case restoringStarted:
 		return "restoringStarted"
+	case restoreFailed:
+		return "restoreFailed"
 	case restored:
 		return "restored"
 	default:
@@ -273,6 +284,11 @@ type Loader struct {
 	// +checklocks:mu
 	containerSpecs map[string]*specs.Spec
 
+	// failedToStart is a set of container IDs that failed to start.
+	//
+	// +checklocks:mu
+	failedToStart map[string]struct{}
+
 	// portForwardProxies is a list of active port forwarding connections.
 	//
 	// +checklocks:mu
@@ -284,6 +300,11 @@ type Loader struct {
 	// saveRestoreNet indicates if the saved network stack should be used
 	// during restore.
 	saveRestoreNet bool
+
+	// restoreErr is the error that occurred during restore.
+	//
+	// +checklocks:mu
+	restoreErr error
 
 	LoaderExtra
 }
@@ -385,6 +406,7 @@ type Args struct {
 	// NvidiaDriverVersion is the NVIDIA driver ABI version to use for
 	// communicating with NVIDIA devices on the host.
 	NvidiaDriverVersion nvconf.DriverVersion
+	NvidiaHostSettings  *nvconf.HostSettings
 	// HostTHP contains host transparent hugepage settings.
 	HostTHP HostTHP
 
@@ -505,6 +527,7 @@ func New(args Args) (*Loader, error) {
 		hostTHP:        args.HostTHP,
 		containerIDs:   make(map[string]string),
 		containerSpecs: make(map[string]*specs.Spec),
+		failedToStart:  make(map[string]struct{}),
 		saveFDs:        args.SaveFDs,
 	}
 	setLoaderFromArgsExtra(l, &args)
@@ -517,12 +540,13 @@ func New(args Args) (*Loader, error) {
 
 	containerName := l.registerContainer(args.Spec, args.ID)
 	l.root = containerInfo{
-		cid:              args.ID,
-		containerName:    containerName,
-		conf:             args.Conf,
-		spec:             args.Spec,
-		goferMountConfs:  args.GoferMountConfs,
-		applicationCores: args.NumCPU,
+		cid:                args.ID,
+		containerName:      containerName,
+		conf:               args.Conf,
+		spec:               args.Spec,
+		goferMountConfs:    args.GoferMountConfs,
+		nvidiaHostSettings: args.NvidiaHostSettings,
+		applicationCores:   args.NumCPU,
 	}
 
 	// Make host FDs stable between invocations. Host FDs must map to the exact
@@ -616,7 +640,7 @@ func New(args Args) (*Loader, error) {
 		return nil, fmt.Errorf("getting root credentials")
 	}
 	// Create root network namespace/stack.
-	netns, err := newRootNetworkNamespace(args.Conf, tk, creds.UserNamespace)
+	netns, err := newRootNetworkNamespace(args.Conf, tk, creds.UserNamespace, l.k)
 	if err != nil {
 		return nil, fmt.Errorf("creating network: %w", err)
 	}
@@ -679,9 +703,6 @@ func New(args Args) (*Loader, error) {
 	}
 	// Initiate the Kernel object, which is required by the Context passed
 	// to createVFS in order to mount (among other things) procfs.
-	unixSocketOpts := transport.UnixSocketOpts{
-		DisconnectOnSave: args.Conf.NetDisconnectOk,
-	}
 	if err = l.k.Init(kernel.InitKernelArgs{
 		FeatureSet:           cpufs.Fixed(),
 		Timekeeper:           tk,
@@ -694,7 +715,6 @@ func New(args Args) (*Loader, error) {
 		RootIPCNamespace:     kernel.NewIPCNamespace(creds.UserNamespace),
 		RootPIDNamespace:     kernel.NewRootPIDNamespace(creds.UserNamespace),
 		MaxFDLimit:           maxFDLimit,
-		UnixSocketOpts:       unixSocketOpts,
 	}); err != nil {
 		return nil, fmt.Errorf("initializing kernel: %w", err)
 	}
@@ -760,7 +780,7 @@ func New(args Args) (*Loader, error) {
 		enableAutosave(l, args.Conf.TestOnlyAutosaveResume, l.saveFDs)
 	}
 
-	l.kernelInitExtra()
+	l.kernelInitExtra(l.k.SupervisorContext())
 
 	// Create the control server using the provided FD.
 	//
@@ -840,6 +860,10 @@ func (l *Loader) Destroy() {
 	}
 	l.mu.Unlock()
 
+	// Wake up all checkpoint waiters. This must be done before the controller
+	// is stopped, since its stop sequence requires all pending RPCs to complete.
+	l.k.SignalAllCheckpointWaiters(fmt.Errorf("Loader destroyed"))
+
 	// Stop the control server. This will indirectly stop any
 	// long-running control operations that are in flight, e.g.
 	// profiling operations.
@@ -877,15 +901,18 @@ func (l *Loader) Destroy() {
 }
 
 func createPlatform(conf *config.Config, numCPU int, deviceFile *fd.FD) (platform.Platform, error) {
+	platformName := conf.Platform
 	p, err := platform.Lookup(conf.Platform)
 	if err != nil {
 		panic(fmt.Sprintf("invalid platform %s: %s", conf.Platform, err))
 	}
-	log.Infof("Platform: %s", conf.Platform)
+
+	log.Infof("Platform: %s", platformName)
 	return p.New(platform.Options{
 		DeviceFile:             deviceFile,
-		DisableSyscallPatching: conf.Platform == "systrap" && conf.SystrapDisableSyscallPatching,
+		DisableSyscallPatching: platformName == "systrap" && conf.SystrapDisableSyscallPatching,
 		ApplicationCores:       numCPU,
+		UseCPUNums:             platformName == "kvm" && conf.UseCPUNums,
 	})
 }
 
@@ -1031,8 +1058,8 @@ func (l *Loader) run() error {
 		return fmt.Errorf("trying to start deleted container %q", l.sandboxID)
 	}
 
-	// If we are restoring, we do not want to create a process.
-	if l.state != restoringUnstarted {
+	switch l.state {
+	case created:
 		if l.root.conf.ProfileEnable {
 			pprof.Initialize()
 		}
@@ -1073,6 +1100,10 @@ func (l *Loader) run() error {
 				return c.ContainerStart(context.Background(), fields, &evt)
 			})
 		}
+	case restoringUnstarted:
+		// If we are restoring, we do not want to create a process.
+	default:
+		return fmt.Errorf("Loader.Run() called in unexpected state=%s", l.state)
 	}
 
 	ep.tg = l.k.GlobalInit()
@@ -1107,10 +1138,13 @@ func (l *Loader) run() error {
 	if err := l.k.Start(); err != nil {
 		return err
 	}
-	if l.state == restoringUnstarted {
-		l.state = restoringStarted
-	} else {
+	switch l.state {
+	case created:
 		l.state = started
+	case restoringUnstarted:
+		l.state = restoringStarted
+	default:
+		panic(fmt.Sprintf("state=%s in Loader.run() should be impossible", l.state))
 	}
 	return nil
 }
@@ -1134,6 +1168,11 @@ func (l *Loader) createSubcontainer(cid string, tty *fd.FD) error {
 func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdioFDs, goferFDs, goferFilestoreFDs []*fd.FD, devGoferFD *fd.FD, goferMountConfs []GoferMountConf, rootfsUpperTarFD *fd.FD) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	cu := cleanup.Make(func() {
+		l.failedToStart[cid] = struct{}{} // +checklocksignore: l.mu is locked above
+	})
+	defer cu.Clean()
 
 	ep := l.processes[execID{cid: cid}]
 	if ep == nil {
@@ -1171,16 +1210,17 @@ func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid st
 	containerName := l.registerContainerLocked(spec, cid)
 	l.k.RegisterContainerName(cid, containerName)
 	info := &containerInfo{
-		cid:               cid,
-		containerName:     containerName,
-		conf:              conf,
-		spec:              spec,
-		goferFDs:          goferFDs,
-		devGoferFD:        devGoferFD,
-		goferFilestoreFDs: goferFilestoreFDs,
-		goferMountConfs:   goferMountConfs,
-		nvidiaUVMDevMajor: l.root.nvidiaUVMDevMajor,
-		rootfsUpperTarFD:  rootfsUpperTarFD,
+		cid:                cid,
+		containerName:      containerName,
+		conf:               conf,
+		spec:               spec,
+		goferFDs:           goferFDs,
+		devGoferFD:         devGoferFD,
+		goferFilestoreFDs:  goferFilestoreFDs,
+		goferMountConfs:    goferMountConfs,
+		nvidiaHostSettings: l.root.nvidiaHostSettings,
+		nvproxyDevInfo:     l.root.nvproxyDevInfo,
+		rootfsUpperTarFD:   rootfsUpperTarFD,
 	}
 	var err error
 	info.procArgs, err = createProcessArgs(cid, spec, conf, creds, l.k, pidns)
@@ -1202,8 +1242,6 @@ func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid st
 		info.stdioFDs = stdioFDs
 	}
 
-	var cu cleanup.Cleanup
-	defer cu.Clean()
 	if devGoferFD != nil {
 		cu.Add(func() {
 			// createContainerProcess() will consume devGoferFD and initialize a gofer
@@ -1502,28 +1540,42 @@ func (l *Loader) executeAsync(args *control.ExecArgs) (kernel.ThreadID, error) {
 
 // waitContainer waits for the init process of a container to exit.
 func (l *Loader) waitContainer(cid string, waitStatus *uint32) error {
-	// Don't defer unlock, as doing so would make it impossible for
-	// multiple clients to wait on the same container.
-	key := execID{cid: cid}
-	tg, err := l.threadGroupFromID(key)
-	if err != nil {
-		l.mu.Lock()
-		// Extra handling is needed if the restoring container has not started yet.
-		if l.state != restoringUnstarted {
-			l.mu.Unlock()
-			return err
-		}
-		// Container could be restoring, first check if container exists.
-		if _, err := l.findProcessLocked(key); err != nil {
-			l.mu.Unlock()
-			return err
-		}
+	l.mu.Lock()
+	state := l.state
+	if state == restoringUnstarted {
 		log.Infof("Waiting for the container to restore, CID: %q", cid)
 		l.restoreDone.Wait()
 		l.mu.Unlock()
-
 		log.Infof("Restore is completed, trying to wait for container %q again.", cid)
 		return l.waitContainer(cid, waitStatus)
+	}
+	tg, err := l.tryThreadGroupFromIDLocked(execID{cid: cid})
+	l.mu.Unlock()
+	if err != nil {
+		// The container does not exist.
+		return err
+	}
+	if tg == nil {
+		// The container has not been started.
+		switch state {
+		case created, started:
+			// Note that state=started means the root container has been started,
+			// but other containers may not have started yet.
+			return fmt.Errorf("container %q not started", cid)
+		case restoringStarted, restored:
+			// The container has restored, we *should* have found the init process...
+			return fmt.Errorf("could not find init process of restored container %q in state %q", cid, state)
+		case restoreFailed:
+			// If restore failed, we should return the a non-zero exit status here to
+			// indicate that the container failed and transition to "stopped" state.
+			log.Warningf("Restore failed, returning from waitContainer with non-zero exit status")
+			*waitStatus = 1
+			return nil
+		case restoringUnstarted:
+			panic("impossible")
+		default:
+			panic(fmt.Sprintf("Invalid state: %s", state))
+		}
 	}
 
 	// If the thread either has already exited or exits during waiting,
@@ -1544,15 +1596,15 @@ func (l *Loader) waitContainer(cid string, waitStatus *uint32) error {
 func (l *Loader) waitRestore() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.state == restored {
-		return nil
+	if l.state == restored || l.state == restoreFailed {
+		return l.restoreErr
 	}
 	if l.state != restoringUnstarted && l.state != restoringStarted {
 		return fmt.Errorf("sandbox is not being restored, cannot wait for restore: state=%s", l.state)
 	}
 	log.Infof("Waiting for the sandbox to restore")
 	l.restoreDone.Wait()
-	return nil
+	return l.restoreErr
 }
 
 func (l *Loader) waitPID(tgid kernel.ThreadID, cid string, waitStatus *uint32) error {
@@ -1612,7 +1664,7 @@ func (l *Loader) WaitExit() linux.WaitStatus {
 	return l.k.GlobalInit().ExitStatus()
 }
 
-func newRootNetworkNamespace(conf *config.Config, clock tcpip.Clock, userns *auth.UserNamespace) (*inet.Namespace, error) {
+func newRootNetworkNamespace(conf *config.Config, clock tcpip.Clock, userns *auth.UserNamespace, uid uniqueid.Provider) (*inet.Namespace, error) {
 	// Create an empty network stack because the network namespace may be empty at
 	// this point. Netns is configured before Run() is called. Netstack is
 	// configured using a control uRPC message. Host network is configured inside
@@ -1629,13 +1681,14 @@ func newRootNetworkNamespace(conf *config.Config, clock tcpip.Clock, userns *aut
 		return inet.NewRootNamespace(hostinet.NewStack(), nil, userns), nil
 
 	case config.NetworkNone, config.NetworkSandbox:
-		s, err := newEmptySandboxNetworkStack(clock, conf.AllowPacketEndpointWrite)
-		if err != nil {
-			return nil, err
-		}
 		creator := &sandboxNetstackCreator{
 			clock:                    clock,
 			allowPacketEndpointWrite: conf.AllowPacketEndpointWrite,
+			uid:                      uid,
+		}
+		s, err := creator.newEmptySandboxNetworkStack()
+		if err != nil {
+			return nil, err
 		}
 		return inet.NewRootNamespace(s, creator, userns), nil
 	case config.NetworkPlugin:
@@ -1647,7 +1700,7 @@ func newRootNetworkNamespace(conf *config.Config, clock tcpip.Clock, userns *aut
 
 }
 
-func newEmptySandboxNetworkStack(clock tcpip.Clock, allowPacketEndpointWrite bool) (*netstack.Stack, error) {
+func (c *sandboxNetstackCreator) newEmptySandboxNetworkStack() (*netstack.Stack, error) {
 	netProtos := []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol, arp.NewProtocol}
 	transProtos := []stack.TransportProtocolFactory{
 		tcp.NewProtocol,
@@ -1655,21 +1708,21 @@ func newEmptySandboxNetworkStack(clock tcpip.Clock, allowPacketEndpointWrite boo
 		icmp.NewProtocol4,
 		icmp.NewProtocol6,
 	}
-	s := netstack.Stack{Stack: stack.New(stack.Options{
+	s := netstack.NewStack(stack.New(stack.Options{
 		NetworkProtocols:   netProtos,
 		TransportProtocols: transProtos,
-		Clock:              clock,
+		Clock:              c.clock,
 		Stats:              netstack.Metrics,
 		HandleLocal:        true,
 		// Enable raw sockets for users with sufficient
 		// privileges.
 		RawFactory:               raw.EndpointFactory{},
-		AllowPacketEndpointWrite: allowPacketEndpointWrite,
+		AllowPacketEndpointWrite: c.allowPacketEndpointWrite,
 		DefaultIPTables:          netfilter.DefaultLinuxTables,
-	})}
+	}), c.uid.UniqueID())
 
 	if nftables.IsNFTablesEnabled() {
-		s.Stack.SetNFTables(nftables.NewNFTables(clock, s.Stack.SecureRNG()))
+		s.Stack.SetNFTables(nftables.NewNFTables(c.clock, s.Stack.SecureRNG()))
 	}
 
 	// Enable SACK Recovery.
@@ -1699,7 +1752,7 @@ func newEmptySandboxNetworkStack(clock tcpip.Clock, allowPacketEndpointWrite boo
 		}
 	}
 
-	return &s, nil
+	return s, nil
 }
 
 // sandboxNetstackCreator implements kernel.NetworkStackCreator.
@@ -1708,11 +1761,12 @@ func newEmptySandboxNetworkStack(clock tcpip.Clock, allowPacketEndpointWrite boo
 type sandboxNetstackCreator struct {
 	clock                    tcpip.Clock
 	allowPacketEndpointWrite bool
+	uid                      uniqueid.Provider
 }
 
 // CreateStack implements kernel.NetworkStackCreator.CreateStack.
-func (f *sandboxNetstackCreator) CreateStack() (inet.Stack, error) {
-	s, err := newEmptySandboxNetworkStack(f.clock, f.allowPacketEndpointWrite)
+func (c *sandboxNetstackCreator) CreateStack() (inet.Stack, error) {
+	s, err := c.newEmptySandboxNetworkStack()
 	if err != nil {
 		return nil, err
 	}
@@ -2121,7 +2175,13 @@ func (l *Loader) containerRuntimeState(cid string) ContainerRuntimeState {
 		return RuntimeStateStopped
 	}
 	if exec.tg == nil {
-		// Container has no thread group assigned, so it has started yet.
+		if l.state == restoreFailed {
+			return RuntimeStateStopped
+		}
+		if _, ok := l.failedToStart[cid]; ok {
+			return RuntimeStateStopped
+		}
+		// Container has no thread group assigned, so it has not started yet.
 		return RuntimeStateCreating
 	}
 	if exec.tg.Leader().ExitState() == kernel.TaskExitNone {

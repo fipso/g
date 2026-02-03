@@ -134,7 +134,7 @@ func newUnlinkedRegularFileDescription(ctx context.Context, creds *auth.Credenti
 	fd := &regularFileFD{}
 	fd.Init(&inode.locks)
 	flags := uint32(linux.O_RDWR)
-	if err := fd.vfsfd.Init(fd, flags, mount, &d.vfsd, &vfs.FileDescriptionOptions{}); err != nil {
+	if err := fd.vfsfd.Init(fd, flags, creds, mount, &d.vfsd, &vfs.FileDescriptionOptions{}); err != nil {
 		return nil, err
 	}
 	return fd, nil
@@ -729,6 +729,10 @@ func (rw *regularFileReadWriter) ReadToBlocks(dsts safemem.BlockSeq) (uint64, er
 //
 // Preconditions: rw.file.inode.mu must be held.
 func (rw *regularFileReadWriter) WriteFromBlocks(srcs safemem.BlockSeq) (uint64, error) {
+	if srcs.IsEmpty() {
+		return 0, nil
+	}
+
 	// Hold dataMu so we can modify size.
 	rw.file.dataMu.Lock()
 	defer rw.file.dataMu.Unlock()

@@ -57,6 +57,7 @@ syscall_test(
     size = "large",
     add_hostinet = True,
     add_overlay = True,
+    shard_count = more_shards,
     test = "//test/syscalls/linux:bind_test",
 )
 
@@ -229,7 +230,8 @@ syscall_test(
 )
 
 syscall_test(
-    size = "medium",
+    size = "large",
+    shard_count = most_shards,
     test = "//test/syscalls/linux:fcntl_test",
 )
 
@@ -645,6 +647,7 @@ syscall_test(
 )
 
 syscall_test(
+    kvm_use_cpu_nums = True,
     test = "//test/syscalls/linux:rseq_test",
 )
 
@@ -982,8 +985,9 @@ syscall_test(
 )
 
 syscall_test(
-    size = "medium",
+    size = "large",
     add_hostinet = True,
+    shard_count = most_shards,
     test = "//test/syscalls/linux:socket_stream_local_test",
 )
 

@@ -16,4 +16,13 @@ package kvm
 
 const (
 	reservedMemory = 0
+	// 5-level page tables are not implemeted on arm64.
+	extendedAddressSpaceAllowed = false
 )
+
+func archSpecialRegions(vSize uintptr) (uintptr, []specialVirtualRegion) {
+	return vSize, nil
+}
+
+func archSpecialRegion(vr virtualRegion) {
+}

@@ -29,13 +29,13 @@ func Main() {
 }
 
 // forEachCmd invokes the passed callback for each command supported by runsc.
-func forEachCmd(cb func(cmd subcommands.Command, group string)) {
-	// Help and flags commands are generated automatically.
-	help := cmd.NewHelp(subcommands.DefaultCommander)
-	help.Register(new(cmd.Platforms))
-	help.Register(new(cmd.Syscalls))
-	cb(help, "")
-	cb(subcommands.FlagsCommand(), "")
+func forEachCmd(cb func(cmd subcommands.Command, group string), help *cli.Help) {
+	if help != nil {
+		// For historical reasons, these subcommands are invoked as `runsc help
+		// platforms` and `runsc help syscalls`.
+		help.Register(new(cmd.Platforms))
+		help.Register(new(cmd.Syscalls))
+	}
 
 	// Register OCI user-facing runsc commands.
 	cb(new(cmd.Checkpoint), "")
@@ -56,6 +56,7 @@ func forEachCmd(cb func(cmd subcommands.Command, group string)) {
 	cb(new(cmd.Start), "")
 	cb(new(cmd.State), "")
 	cb(new(cmd.Tar), "")
+	cb(new(cmd.Update), "")
 	cb(new(cmd.Wait), "")
 
 	// Helpers.

@@ -108,6 +108,11 @@ func (m *Message) Header() linux.NetlinkMessageHeader {
 	return m.hdr
 }
 
+// Buffer returns the buffer of this message.
+func (m *Message) Buffer() []byte {
+	return m.buf
+}
+
 // GetData unmarshals the payload message header from this netlink message, and
 // returns the attributes portion.
 func (m *Message) GetData(msg marshal.Marshallable) (AttrsView, bool) {
@@ -219,6 +224,8 @@ func (n *NestedAttr) PutAttr(atype uint16, v marshal.Marshallable) {
 		buf: *n,
 	}
 	m.PutAttr(atype, v)
+	// m.buf may have been reallocated in PutAttr, so update the NestedAttr.
+	*n = m.buf
 }
 
 // PutAttrString adds s to the provided NestedAttr, creating nested attributes.
@@ -227,6 +234,8 @@ func (n *NestedAttr) PutAttrString(atype uint16, s string) {
 		buf: *n,
 	}
 	m.PutAttrString(atype, s)
+	// m.buf may have been reallocated in PutAttrString, so update the NestedAttr.
+	*n = m.buf
 }
 
 // MessageSet contains a series of netlink messages.
@@ -374,6 +383,28 @@ func (v *BytesView) String() string {
 	return string(b)
 }
 
+// Uint8 converts the raw attribute value to uint8.
+func (v *BytesView) Uint8() (uint8, bool) {
+	attr := []byte(*v)
+	val := primitive.Uint8(0)
+	if len(attr) != val.SizeBytes() {
+		return 0, false
+	}
+	val.UnmarshalBytes(attr)
+	return uint8(val), true
+}
+
+// Uint16 converts the raw attribute value to uint16.
+func (v *BytesView) Uint16() (uint16, bool) {
+	attr := []byte(*v)
+	val := primitive.Uint16(0)
+	if len(attr) != val.SizeBytes() {
+		return 0, false
+	}
+	val.UnmarshalBytes(attr)
+	return uint16(val), true
+}
+
 // Uint32 converts the raw attribute value to uint32.
 func (v *BytesView) Uint32() (uint32, bool) {
 	attr := []byte(*v)
@@ -396,6 +427,28 @@ func (v *BytesView) Uint64() (uint64, bool) {
 	return uint64(val), true
 }
 
+// Int8 converts the raw attribute value to int8.
+func (v *BytesView) Int8() (int8, bool) {
+	attr := []byte(*v)
+	val := primitive.Int8(0)
+	if len(attr) != val.SizeBytes() {
+		return 0, false
+	}
+	val.UnmarshalBytes(attr)
+	return int8(val), true
+}
+
+// Int16 converts the raw attribute value to int32.
+func (v *BytesView) Int16() (int16, bool) {
+	attr := []byte(*v)
+	val := primitive.Int16(0)
+	if len(attr) != val.SizeBytes() {
+		return 0, false
+	}
+	val.UnmarshalBytes(attr)
+	return int16(val), true
+}
+
 // Int32 converts the raw attribute value to int32.
 func (v *BytesView) Int32() (int32, bool) {
 	attr := []byte(*v)
@@ -407,52 +460,63 @@ func (v *BytesView) Int32() (int32, bool) {
 	return int32(val), true
 }
 
+// Int64 converts the raw attribute value to int32.
+func (v *BytesView) Int64() (int64, bool) {
+	attr := []byte(*v)
+	val := primitive.Int64(0)
+	if len(attr) != val.SizeBytes() {
+		return 0, false
+	}
+	val.UnmarshalBytes(attr)
+	return int64(val), true
+}
+
 // NetToHostU16 converts a uint16 in network byte order to
 // host byte order value.
 func NetToHostU16(v uint16) uint16 {
-	b := make([]byte, 2)
-	binary.NativeEndian.PutUint16(b, v)
-	return binary.BigEndian.Uint16(b)
+	var b [2]byte
+	binary.BigEndian.PutUint16(b[:], v)
+	return binary.NativeEndian.Uint16(b[:])
 }
 
 // NetToHostU32 converts a uint32 in network byte order to
 // host byte order value.
 func NetToHostU32(v uint32) uint32 {
-	b := make([]byte, 4)
-	binary.NativeEndian.PutUint32(b, v)
-	return binary.BigEndian.Uint32(b)
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v)
+	return binary.NativeEndian.Uint32(b[:])
 }
 
 // NetToHostU64 converts a uint64 in network byte order to
 // host byte order value.
 func NetToHostU64(v uint64) uint64 {
-	b := make([]byte, 8)
-	binary.NativeEndian.PutUint64(b, v)
-	return binary.BigEndian.Uint64(b)
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], v)
+	return binary.NativeEndian.Uint64(b[:])
 }
 
 // HostToNetU16 converts a uint16 in host byte order to
 // network byte order value.
 func HostToNetU16(v uint16) uint16 {
-	b := make([]byte, 2)
-	binary.BigEndian.PutUint16(b, v)
-	return binary.NativeEndian.Uint16(b)
+	var b [2]byte
+	binary.NativeEndian.PutUint16(b[:], v)
+	return binary.BigEndian.Uint16(b[:])
 }
 
 // HostToNetU32 converts a uint32 in host byte order to
 // network byte order value.
 func HostToNetU32(v uint32) uint32 {
-	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, v)
-	return binary.NativeEndian.Uint32(b)
+	var b [4]byte
+	binary.NativeEndian.PutUint32(b[:], v)
+	return binary.BigEndian.Uint32(b[:])
 }
 
 // HostToNetU64 converts a uint64 in host byte order to
 // network byte order value.
 func HostToNetU64(v uint64) uint64 {
-	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, v)
-	return binary.NativeEndian.Uint64(b)
+	var b [8]byte
+	binary.NativeEndian.PutUint64(b[:], v)
+	return binary.BigEndian.Uint64(b[:])
 }
 
 // PutU16 converts a uint16 to network byte order and returns it as a

@@ -28,6 +28,7 @@
 
 #include "gtest/gtest.h"
 #include "absl/strings/str_cat.h"
+#include "absl/types/span.h"
 #include "test/util/file_descriptor.h"
 #include "test/util/posix_error.h"
 #include "test/util/save_util.h"
@@ -38,14 +39,17 @@ namespace gvisor {
 namespace testing {
 
 PosixErrorOr<FileDescriptor> NetlinkBoundSocket(int protocol) {
+  struct sockaddr_nl addr = {};
+  addr.nl_family = AF_NETLINK;
+  return NetlinkBoundSocket(protocol, &addr);
+}
+
+PosixErrorOr<FileDescriptor> NetlinkBoundSocket(
+    int protocol, const struct sockaddr_nl* addr) {
   FileDescriptor fd;
   ASSIGN_OR_RETURN_ERRNO(fd, Socket(AF_NETLINK, SOCK_RAW, protocol));
 
-  struct sockaddr_nl addr = {};
-  addr.nl_family = AF_NETLINK;
-
-  RETURN_ERROR_IF_SYSCALL_FAIL(
-      bind(fd.get(), reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)));
+  RETURN_ERROR_IF_SYSCALL_FAIL(bind(fd.get(), AsSockAddr(addr), sizeof(*addr)));
   MaybeSave();
 
   return std::move(fd);
@@ -257,6 +261,18 @@ const struct nfattr* FindNfAttr(const struct nlmsghdr* hdr,
     }
   }
   return nullptr;
+}
+
+std::vector<const struct nfattr*> ParseNfAttrs(
+    absl::Span<const char> attributes) {
+  int attrlen = attributes.size();
+  const struct nfattr* nfa =
+      reinterpret_cast<const struct nfattr*>(attributes.data());
+  std::vector<const struct nfattr*> attrs;
+  for (; NFA_OK(nfa, attrlen); nfa = NFA_NEXT(nfa, attrlen)) {
+    attrs.push_back(nfa);
+  }
+  return attrs;
 }
 
 }  // namespace testing

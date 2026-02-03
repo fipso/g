@@ -270,6 +270,12 @@ type containerManager struct {
 // StartRoot will start the root container process.
 func (cm *containerManager) StartRoot(cid *string, _ *struct{}) error {
 	log.Debugf("containerManager.StartRoot, cid: %s", *cid)
+	cm.l.mu.Lock()
+	state := cm.l.state
+	cm.l.mu.Unlock()
+	if state != created {
+		return fmt.Errorf("sandbox is not in created state, cannot start root container: state=%s", state)
+	}
 	// Tell the root container to start and wait for the result.
 	return cm.onStart()
 }
@@ -365,6 +371,12 @@ func (cm *containerManager) StartSubcontainer(args *StartArgs, _ *struct{}) erro
 	}
 	if args.CID == "" {
 		return errors.New("start argument missing container ID")
+	}
+	cm.l.mu.Lock()
+	state := cm.l.state
+	cm.l.mu.Unlock()
+	if state != started {
+		return fmt.Errorf("sandbox is not in started state, cannot start subcontainer: state=%s", state)
 	}
 	expectedFDs := 1 // At least one FD for the root filesystem.
 	expectedFDs += args.NumGoferFilestoreFDs
@@ -525,7 +537,7 @@ type RestoreOpts struct {
 // The container's current kernel is destroyed, a restore environment is
 // created, and the kernel is recreated with the restore state file. The
 // container then sends the signal to start.
-func (cm *containerManager) Restore(o *RestoreOpts, _ *struct{}) error {
+func (cm *containerManager) Restore(o *RestoreOpts, _ *struct{}) (retErr error) {
 	timer := starttime.Timer("Restore")
 	timer.Reached("cm.Restore RPC")
 	log.Debugf("containerManager.Restore")
@@ -535,9 +547,15 @@ func (cm *containerManager) Restore(o *RestoreOpts, _ *struct{}) error {
 	cu := cleanup.Make(cm.l.mu.Unlock)
 	defer cu.Clean()
 
-	if cm.l.state > created {
+	if cm.l.state != created {
 		return fmt.Errorf("cannot restore a container in state=%s", cm.l.state)
 	}
+	defer func() {
+		if retErr != nil {
+			cu.Clean() // Release `cm.l.mu` as onRestoreFailed will acquire it.
+			cm.onRestoreFailed(fmt.Errorf("Restore failed: %w", retErr))
+		}
+	}()
 	if len(o.Files) == 0 {
 		return fmt.Errorf("at least one file must be passed to Restore")
 	}
@@ -572,12 +590,12 @@ func (cm *containerManager) Restore(o *RestoreOpts, _ *struct{}) error {
 	}
 
 	cm.restorer = &restorer{
-		readyToStart:  cm.onStart,
-		onRestoreDone: cm.onRestoreDone,
-		stateFile:     reader,
-		background:    o.Background,
-		timer:         timer,
-		mainMF:        mf,
+		cm:         cm,
+		stateFile:  reader,
+		metadata:   metadata,
+		background: o.Background,
+		timer:      timer,
+		mainMF:     mf,
 	}
 	cm.l.restoreDone = sync.NewCond(&cm.l.mu)
 	cm.l.state = restoringUnstarted
@@ -620,7 +638,7 @@ func (cm *containerManager) Restore(o *RestoreOpts, _ *struct{}) error {
 
 	containerSpecs, ok := metadata[ContainerSpecsKey]
 	if !ok {
-		return fmt.Errorf("container specs not found in metdata during restore")
+		return fmt.Errorf("container specs not found in metadata during restore")
 	}
 	specs, err := specutils.GetSpecsFromString(containerSpecs)
 	if err != nil {
@@ -675,6 +693,15 @@ func getRestoreReadersForLocalCheckpointFiles(o *RestoreOpts) (io.ReadCloser, io
 		nil
 }
 
+func (cm *containerManager) onRestoreFailed(err error) {
+	cm.l.mu.Lock()
+	cm.l.state = restoreFailed
+	cm.l.restoreErr = err
+	cm.l.mu.Unlock()
+	cm.l.restoreDone.Broadcast()
+	cm.restorer = nil
+}
+
 func (cm *containerManager) onRestoreDone() {
 	cm.l.mu.Lock()
 	cm.l.state = restored
@@ -683,7 +710,7 @@ func (cm *containerManager) onRestoreDone() {
 	cm.restorer = nil
 }
 
-func (cm *containerManager) RestoreSubcontainer(args *StartArgs, _ *struct{}) error {
+func (cm *containerManager) RestoreSubcontainer(args *StartArgs, _ *struct{}) (retErr error) {
 	timeline := timing.OrphanTimeline(fmt.Sprintf("cont:%s", args.CID[0:min(8, len(args.CID))]), gtime.Now()).Lease()
 	defer timeline.End()
 	log.Debugf("containerManager.RestoreSubcontainer, cid: %s, args: %+v", args.CID, args)
@@ -694,6 +721,11 @@ func (cm *containerManager) RestoreSubcontainer(args *StartArgs, _ *struct{}) er
 	if state != restoringUnstarted {
 		return fmt.Errorf("sandbox is not being restored, cannot restore subcontainer: state=%s", state)
 	}
+	defer func() {
+		if retErr != nil {
+			cm.onRestoreFailed(fmt.Errorf("RestoreSubcontainer failed: %w", retErr))
+		}
+	}()
 
 	// Validate arguments.
 	if args.Spec == nil {

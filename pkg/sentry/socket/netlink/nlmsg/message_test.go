@@ -16,6 +16,7 @@ package message_test
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -341,6 +342,54 @@ func TestBytesView(t *testing.T) {
 			ok:    false,
 			value: 0,
 		},
+		bytesViewTest[uint16]{
+			desc:  "Convert BytesView to uint16",
+			input: nlmsg.BytesView([]byte{7, 0}),
+			ok:    true,
+			value: 7,
+		},
+		bytesViewTest[uint16]{
+			desc:  "Failed convert BytesView to uint16",
+			input: nlmsg.BytesView([]byte{7}),
+			ok:    false,
+			value: 0,
+		},
+		bytesViewTest[int16]{
+			desc:  "Convert BytesView to int16",
+			input: nlmsg.BytesView([]byte{8, 0}),
+			ok:    true,
+			value: 8,
+		},
+		bytesViewTest[int16]{
+			desc:  "Failed convert BytesView to int16",
+			input: nlmsg.BytesView([]byte{8}),
+			ok:    false,
+			value: 0,
+		},
+		bytesViewTest[uint8]{
+			desc:  "Convert BytesView to uint8",
+			input: nlmsg.BytesView([]byte{7}),
+			ok:    true,
+			value: 7,
+		},
+		bytesViewTest[uint8]{
+			desc:  "Failed convert BytesView to uint8",
+			input: nlmsg.BytesView([]byte{}),
+			ok:    false,
+			value: 0,
+		},
+		bytesViewTest[int8]{
+			desc:  "Convert BytesView to int8",
+			input: nlmsg.BytesView([]byte{8}),
+			ok:    true,
+			value: 8,
+		},
+		bytesViewTest[int8]{
+			desc:  "Failed convert BytesView to int8",
+			input: nlmsg.BytesView([]byte{}),
+			ok:    false,
+			value: 0,
+		},
 	}
 	for _, test := range tests {
 		switch test.(type) {
@@ -368,8 +417,134 @@ func TestBytesView(t *testing.T) {
 			if ok && value != tst.value {
 				t.Errorf("%v: BytesView.Int32() got %v, want %v", tst.desc, value, tst.value)
 			}
+		case bytesViewTest[uint16]:
+			tst := test.(bytesViewTest[uint16])
+			value, ok := tst.input.Uint16()
+			if ok != tst.ok {
+				t.Errorf("%v: BytesView.Uint16() got ok = %v, want %v", tst.desc, ok, tst.ok)
+			}
+			if ok && value != tst.value {
+				t.Errorf("%v: BytesView.Uint16() got %v, want %v", tst.desc, value, tst.value)
+			}
+		case bytesViewTest[int16]:
+			tst := test.(bytesViewTest[int16])
+			value, ok := tst.input.Int16()
+			if ok != tst.ok {
+				t.Errorf("%v: BytesView.Int16() got ok = %v, want %v", tst.desc, ok, tst.ok)
+			}
+			if ok && value != tst.value {
+				t.Errorf("%v: BytesView.Int16() got %v, want %v", tst.desc, value, tst.value)
+			}
+		case bytesViewTest[uint8]:
+			tst := test.(bytesViewTest[uint8])
+			value, ok := tst.input.Uint8()
+			if ok != tst.ok {
+				t.Errorf("%v: BytesView.Uint8() got ok = %v, want %v", tst.desc, ok, tst.ok)
+			}
+			if ok && value != tst.value {
+				t.Errorf("%v: BytesView.Uint8() got %v, want %v", tst.desc, value, tst.value)
+			}
+		case bytesViewTest[int8]:
+			tst := test.(bytesViewTest[int8])
+			value, ok := tst.input.Int8()
+			if ok != tst.ok {
+				t.Errorf("%v: BytesView.Int8() got ok = %v, want %v", tst.desc, ok, tst.ok)
+			}
+			if ok && value != tst.value {
+				t.Errorf("%v: BytesView.Int8() got %v, want %v", tst.desc, value, tst.value)
+			}
 		default:
 			t.Errorf("BytesView %T not support", t)
 		}
+	}
+}
+
+func TestHostToNet(t *testing.T) {
+	tests := []struct {
+		name     string
+		validate func() error
+	}{
+		{
+			name: "U16",
+			validate: func() error {
+				v := uint16(0x1234)
+				if got, want := nlmsg.HostToNetU16(v), uint16(0x3412); got != want {
+					return fmt.Errorf("HostToNetU16(0x%x) = 0x%x, want: 0x%x", v, got, want)
+				}
+				return nil
+			},
+		},
+		{
+			name: "U32",
+			validate: func() error {
+				v := uint32(0x12345678)
+				if got, want := nlmsg.HostToNetU32(v), uint32(0x78563412); got != want {
+					return fmt.Errorf("HostToNetU32(0x%x) = 0x%x, want: 0x%x", v, got, want)
+				}
+				return nil
+			},
+		},
+		{
+			name: "U64",
+			validate: func() error {
+				v := uint64(0x123456789abcdef)
+				if got, want := nlmsg.HostToNetU64(v), uint64(0xefcdab8967452301); got != want {
+					return fmt.Errorf("HostToNetU64(0x%x) = 0x%x, want: 0x%x", v, got, want)
+				}
+				return nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.validate(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestNetToHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		validate func() error
+	}{
+		{
+			name: "U16",
+			validate: func() error {
+				v := uint16(0x1234)
+				if got, want := nlmsg.NetToHostU16(v), uint16(0x3412); got != want {
+					return fmt.Errorf("NetToHostU16(0x%x) = 0x%x, want: 0x%x", v, got, want)
+				}
+				return nil
+			},
+		},
+		{
+			name: "U32",
+			validate: func() error {
+				v := uint32(0x12345678)
+				if got, want := nlmsg.NetToHostU32(v), uint32(0x78563412); got != want {
+					return fmt.Errorf("NetToHostU32(0x%x) = 0x%x, want: 0x%x", v, got, want)
+				}
+				return nil
+			},
+		},
+		{
+			name: "U64",
+			validate: func() error {
+				v := uint64(0x123456789abcdef)
+				if got, want := nlmsg.NetToHostU64(v), uint64(0xefcdab8967452301); got != want {
+					return fmt.Errorf("NetToHostU64(0x%x) = 0x%x, want: 0x%x", v, got, want)
+				}
+				return nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.validate(); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 }

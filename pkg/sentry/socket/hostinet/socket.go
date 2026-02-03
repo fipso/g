@@ -31,11 +31,11 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/sockfs"
 	"gvisor.dev/gvisor/pkg/sentry/hostfd"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
-	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/ktime"
 	"gvisor.dev/gvisor/pkg/sentry/socket"
 	"gvisor.dev/gvisor/pkg/sentry/socket/control"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
+	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/syserr"
 	"gvisor.dev/gvisor/pkg/usermem"
 	"gvisor.dev/gvisor/pkg/waiter"
@@ -117,6 +117,22 @@ type Socket struct {
 	protocol int            // Read-only.
 	queue    waiter.Queue
 
+	// If persistentEventMask is non-zero, persistentEntry is a no-op waiter
+	// that is registered in queue for all events in persistentEventMask.
+	// Mutations to persistentEventMask and persistentEntry are serialized by
+	// persistentEventMu.
+	//
+	// Bits in persistentEventMask are set by EventRegister(), and never unset.
+	// This ensures that queue.Events() does not change (necessitating calls to
+	// fdnotifier.UpdateFD() => epoll_ctl(EPOLL_CTL_MOD)) when EventRegister()
+	// and EventUnregister() are frequently called with entries with the same
+	// masks, as when e.g. applications repeatedly call poll() with the same
+	// event mask, or blocking accept() / read() / write() / recvmsg() /
+	// sendmsg() / etc., on the same socket.
+	persistentEventMu   sync.Mutex
+	persistentEventMask atomicbitops.Uint64
+	persistentEntry     waiter.Entry
+
 	// fd is the host socket fd. It must have O_NONBLOCK, so that operations
 	// will return EWOULDBLOCK instead of blocking on the host. This allows us to
 	// handle blocking behavior independently in the sentry.
@@ -145,7 +161,7 @@ func newSocket(t *kernel.Task, family int, stype linux.SockType, protocol int, f
 		return nil, syserr.FromError(err)
 	}
 	vfsfd := &s.vfsfd
-	if err := vfsfd.Init(s, linux.O_RDWR|(flags&linux.O_NONBLOCK), mnt, d, &vfs.FileDescriptionOptions{
+	if err := vfsfd.Init(s, linux.O_RDWR|(flags&linux.O_NONBLOCK), t.Credentials(), mnt, d, &vfs.FileDescriptionOptions{
 		DenyPRead:         true,
 		DenyPWrite:        true,
 		UseDentryMetadata: true,
@@ -236,7 +252,7 @@ func (p *socketProvider) Socket(t *kernel.Task, stypeflags linux.SockType, proto
 
 	// Raw and packet sockets require CAP_NET_RAW.
 	if stype == linux.SOCK_RAW || p.family == linux.AF_PACKET {
-		if creds := auth.CredentialsFromContext(t); !creds.HasCapability(linux.CAP_NET_RAW) {
+		if !t.HasCapabilityIn(linux.CAP_NET_RAW, t.NetworkNamespace().UserNamespace()) {
 			return nil, syserr.ErrNotPermitted
 		}
 	}
@@ -292,6 +308,41 @@ func (s *Socket) Readiness(mask waiter.EventMask) waiter.EventMask {
 
 // EventRegister implements waiter.Waitable.EventRegister.
 func (s *Socket) EventRegister(e *waiter.Entry) error {
+	if em, pem := e.Mask(), waiter.EventMask(s.persistentEventMask.Load()); em&^pem != 0 {
+		s.persistentEventMu.Lock()
+		pem = waiter.EventMask(s.persistentEventMask.RacyLoad())
+		if newMask := pem | em; pem != newMask {
+			if pem == 0 {
+				s.persistentEntry.Init(waiter.NoopListener{}, newMask)
+				s.queue.EventRegister(&s.persistentEntry)
+			} else {
+				s.persistentEntry.SetQueuedMask(&s.queue, newMask)
+			}
+			if err := fdnotifier.UpdateFD(int32(s.fd)); err != nil {
+				if pem == 0 {
+					s.queue.EventUnregister(&s.persistentEntry)
+				}
+				s.persistentEventMu.Unlock()
+				return err
+			}
+			s.persistentEventMask.Store(uint64(newMask))
+		}
+		s.persistentEventMu.Unlock()
+	}
+	s.queue.EventRegister(e)
+	return nil
+}
+
+// EventUnregister implements waiter.Waitable.EventUnregister.
+func (s *Socket) EventUnregister(e *waiter.Entry) {
+	s.queue.EventUnregister(e)
+}
+
+// eventRegisterTransient is equivalent to EventRegister, but does not keep
+// events registered with fdnotifier after eventUnregisterTransient. This is
+// used when there is no reason to expect the same events to be registered
+// again in the future.
+func (s *Socket) eventRegisterTransient(e *waiter.Entry) error {
 	s.queue.EventRegister(e)
 	if err := fdnotifier.UpdateFD(int32(s.fd)); err != nil {
 		s.queue.EventUnregister(e)
@@ -300,8 +351,9 @@ func (s *Socket) EventRegister(e *waiter.Entry) error {
 	return nil
 }
 
-// EventUnregister implements waiter.Waitable.EventUnregister.
-func (s *Socket) EventUnregister(e *waiter.Entry) {
+// eventUnregisterTransient must be used instead of EventUnregister to
+// unregister notifiers registered by eventRegisterTransient.
+func (s *Socket) eventUnregisterTransient(e *waiter.Entry) {
 	s.queue.EventUnregister(e)
 	if err := fdnotifier.UpdateFD(int32(s.fd)); err != nil {
 		panic(err)
@@ -336,8 +388,8 @@ func (s *Socket) Connect(t *kernel.Task, sockaddr []byte, blocking bool) *syserr
 	// codes listed here, explaining the reason for the failure)." - connect(2)
 	writableMask := waiter.WritableEvents
 	e, ch := waiter.NewChannelEntry(writableMask)
-	s.EventRegister(&e)
-	defer s.EventUnregister(&e)
+	s.eventRegisterTransient(&e)
+	defer s.eventUnregisterTransient(&e)
 	if s.Readiness(writableMask)&writableMask == 0 {
 		if err := t.Block(ch); err != nil {
 			return syserr.FromError(err)

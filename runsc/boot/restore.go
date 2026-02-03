@@ -46,6 +46,7 @@ import (
 	"gvisor.dev/gvisor/runsc/boot/pprof"
 	"gvisor.dev/gvisor/runsc/config"
 	"gvisor.dev/gvisor/runsc/specutils"
+	"gvisor.dev/gvisor/runsc/starttime"
 	"gvisor.dev/gvisor/runsc/version"
 )
 
@@ -77,6 +78,9 @@ type restorer struct {
 	// stateFile is a reader for the statefile.
 	stateFile io.ReadCloser
 
+	// metadata is the metadata contained in the statefile.
+	metadata map[string]string
+
 	// timer is the timer for the restore process.
 	// The `restorer` owns the timer and will end it when restore is complete.
 	timer *timing.Timer
@@ -98,11 +102,8 @@ type restorer struct {
 	// deviceFile is the required to start the platform.
 	deviceFile *fd.FD
 
-	// readyToStart is a callback triggered when the sandbox is ready to start.
-	readyToStart func() error
-
-	// onRestoreDone is a callback triggered when the restore is done.
-	onRestoreDone func()
+	// cm is the container manager that is used to restore the sandbox.
+	cm *containerManager
 
 	// checkpointedSpecs contains the map of container specs used during
 	// checkpoint.
@@ -160,13 +161,10 @@ func (r *restorer) restoreContainerInfo(l *Loader, info *containerInfo, containe
 	// Non-container-specific restore work:
 
 	if len(r.containers) == r.totalContainers {
-		if err := specutils.RestoreValidateSpec(r.checkpointedSpecs, l.GetContainerSpecs(), l.root.conf); err != nil {
-			return fmt.Errorf("failed to handle restore spec validation: %w", err)
-		}
-		r.timer.Reached("specs validated")
-
 		// Trigger the restore if this is the last container.
-		return r.restore(l)
+		if err := r.restore(l); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -182,6 +180,13 @@ func createNetworkStackForRestore(l *Loader) (*stack.Stack, inet.Stack) {
 
 func (r *restorer) restore(l *Loader) error {
 	log.Infof("Starting to restore %d containers", len(r.containers))
+
+	// Validate the container specs to ensure they did not meaningfully change
+	// between checkpoint and restore.
+	if err := specutils.RestoreValidateSpec(r.checkpointedSpecs, l.GetContainerSpecs(), l.root.conf); err != nil {
+		return fmt.Errorf("failed to handle restore spec validation: %w", err)
+	}
+	r.timer.Reached("specs validated")
 
 	// Create a new root network namespace with the network stack of the
 	// old kernel to preserve the existing network configuration.
@@ -267,6 +272,11 @@ func (r *restorer) restore(l *Loader) error {
 		r.asyncMFLoader.KickoffPrivate(mfmap)
 	}
 
+	ctx, err = r.prepareRestoreContextExtraLocked(ctx, l)
+	if err != nil {
+		return err
+	}
+
 	// Load the state.
 	r.timer.Reached("loading kernel")
 	if err := l.k.LoadFrom(ctx, r.stateFile, r.asyncMFLoader, nil, oldInetStack, time.NewCalibratedClocks(), &vfs.CompleteRestoreOptions{}, l.saveRestoreNet); err != nil {
@@ -344,7 +354,7 @@ func (r *restorer) restore(l *Loader) error {
 
 	l.k.RestoreContainerMapping(l.containerIDs)
 
-	l.kernelInitExtra()
+	l.kernelInitExtra(ctx)
 
 	// Refresh the control server with the newly created kernel.
 	l.ctrl.refreshHandlers()
@@ -353,7 +363,7 @@ func (r *restorer) restore(l *Loader) error {
 	cu.Clean()
 
 	r.timer.Reached("Starting sandbox")
-	if err := r.readyToStart(); err != nil {
+	if err := r.cm.onStart(); err != nil {
 		return fmt.Errorf("restorer.readyToStart callback failed: %w", err)
 	}
 
@@ -386,10 +396,46 @@ func (r *restorer) restore(l *Loader) error {
 			}
 		}
 
-		r.onRestoreDone()
+		r.cm.onRestoreDone()
 		postRestoreThread.Reached("kernel notified")
 
 		log.Infof("Restore successful")
+
+		// Calculate the CPU time saved for restore.
+		t, err := state.CPUTime()
+		if err != nil {
+			log.Warningf("Failed to get CPU time usage for restore, err: %v", err)
+		} else {
+			log.Infof("Restore CPU usage: %s", t.String())
+			savedTimeStr, ok := r.metadata[state.GvisorCPUUsageKey]
+			if !ok {
+				log.Warningf("Failed to retrieve CPU time usage from the metadata")
+			} else {
+				savedTime, err := time2.ParseDuration(savedTimeStr)
+				if err != nil {
+					log.Warningf("CPU time usage in metadata %v is invalid, err: %v", savedTimeStr, err)
+				} else {
+					log.Infof("CPU time saved with restore: %v", (savedTime - t).String())
+				}
+			}
+		}
+
+		// Calculate the walltime saved for restore.
+		startTime := starttime.Get()
+		curTime := time2.Now()
+		wt := curTime.Sub(startTime)
+		log.Infof("Restore wall time: %s", wt.String())
+		savedWtStr, ok := r.metadata[state.GvisorWallTimeKey]
+		if !ok {
+			log.Warningf("Failed to retrieve walltime from the metadata")
+		} else {
+			savedWt, err := time2.ParseDuration(savedWtStr)
+			if err != nil {
+				log.Warningf("Walltime in metadata %v is invalid, err: %v", savedWtStr, err)
+			} else {
+				log.Infof("Walltime saved with restore: %v", (savedWt - wt).String())
+			}
+		}
 	}()
 
 	// Transfer ownership of the `timer` to a new goroutine.
@@ -439,6 +485,13 @@ func (l *Loader) saveWithOpts(saveOpts *state.SaveOpts, execOpts *control.SaveRe
 		return err
 	}
 	saveOpts.Metadata[ContainerSpecsKey] = specsStr
+
+	// Save start time of the runsc process.
+	saveOpts.StartTime = starttime.Get()
+
+	if err := l.prepareSaveOptsExtra(saveOpts); err != nil {
+		return err
+	}
 
 	state := control.State{
 		Kernel:   l.k,

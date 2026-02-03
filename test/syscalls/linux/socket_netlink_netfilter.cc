@@ -54,7 +54,9 @@ namespace {
 constexpr uint32_t kSeq = 12345;
 
 using ::testing::_;
+using ::testing::TestParamInfo;
 using ::testing::UnitTest;
+using ::testing::ValuesIn;
 
 using SockOptTest = ::testing::TestWithParam<
     std::tuple<int, std::function<bool(int)>, std::string>>;
@@ -932,7 +934,6 @@ TEST(NetlinkNetfilterTest, ErrNewBaseChainWithInvalidPolicy) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_table_request_buffer =
@@ -955,6 +956,7 @@ TEST(NetlinkNetfilterTest, ErrNewBaseChainWithInvalidPolicy) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 5)
@@ -1122,7 +1124,6 @@ TEST(NetlinkNetfilterTest, ErrNewBaseChainWithInvalidChainType) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1139,6 +1140,7 @@ TEST(NetlinkNetfilterTest, ErrNewBaseChainWithInvalidChainType) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -1167,7 +1169,6 @@ TEST(NetlinkNetfilterTest, ErrNewNATBaseChainWithInvalidPriority) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1184,6 +1185,7 @@ TEST(NetlinkNetfilterTest, ErrNewNATBaseChainWithInvalidPriority) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -1212,7 +1214,6 @@ TEST(NetlinkNetfilterTest, ErrUnsupportedNewNetDevBaseChain) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1229,6 +1230,7 @@ TEST(NetlinkNetfilterTest, ErrUnsupportedNewNetDevBaseChain) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -1257,7 +1259,6 @@ TEST(NetlinkNetfilterTest, ErrUnsupportedNewInetBaseChainAtIngress) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1274,6 +1275,7 @@ TEST(NetlinkNetfilterTest, ErrUnsupportedNewInetBaseChainAtIngress) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -1302,7 +1304,6 @@ TEST(NetlinkNetfilterTest, ErrUnsupportedNewBaseChainWithChainCounters) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1319,6 +1320,7 @@ TEST(NetlinkNetfilterTest, ErrUnsupportedNewBaseChainWithChainCounters) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .RawAttr(NFTA_CHAIN_COUNTERS, nullptr, 0)
                    .Build())
@@ -1540,7 +1542,6 @@ TEST(NetlinkNetfilterTest, AddBaseChainWithDropPolicy) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1557,6 +1558,7 @@ TEST(NetlinkNetfilterTest, AddBaseChainWithDropPolicy) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -1787,7 +1789,6 @@ TEST(NetlinkNetfilterTest, GetBaseChain) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1804,6 +1805,7 @@ TEST(NetlinkNetfilterTest, GetBaseChain) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .RawAttr(NFTA_CHAIN_USERDATA, test_user_data,
                             expected_udata_size)
@@ -1857,7 +1859,6 @@ TEST(NetlinkNetfilterTest, ErrDeleteChainWithNoTableNameSpecified) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -1874,6 +1875,7 @@ TEST(NetlinkNetfilterTest, ErrDeleteChainWithNoTableNameSpecified) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -1984,7 +1986,6 @@ TEST(NetlinkNetfilterTest, DeleteBaseChain) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -2001,6 +2002,7 @@ TEST(NetlinkNetfilterTest, DeleteBaseChain) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -2041,7 +2043,6 @@ TEST(NetlinkNetfilterTest, DeleteBaseChainByHandle) {
       NlNestedAttr()
           .U32Attr(NFTA_HOOK_HOOKNUM, test_hook_num)
           .U32Attr(NFTA_HOOK_PRIORITY, test_hook_priority)
-          .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
           .Build();
 
   std::vector<char> add_request_buffer =
@@ -2058,6 +2059,7 @@ TEST(NetlinkNetfilterTest, DeleteBaseChainByHandle) {
                    .U32Attr(NFTA_CHAIN_POLICY, test_policy)
                    .RawAttr(NFTA_CHAIN_HOOK, nested_hook_data.data(),
                             nested_hook_data.size())
+                   .StrAttr(NFTA_CHAIN_TYPE, test_chain_type_name)
                    .U32Attr(NFTA_CHAIN_FLAGS, test_chain_flags)
                    .Build())
           .SeqEnd(kSeq + 3)
@@ -3039,8 +3041,13 @@ TEST(NetlinkNetfilterTest, GetRuleDump) {
 
   uint8_t udata[] = {0, 1, 2};
   size_t expected_udata_size = sizeof(udata);
-  std::vector<char> rule_expr_data = NlImmExpr::DefaultAcceptAll();
-  std::vector<char> list_expr_data = NlListAttr().Add(rule_expr_data).Build();
+  // Add two expressions.
+  std::vector<char> imm_expr_accept_all_data = NlImmExpr::DefaultAcceptAll();
+  std::vector<char> imm_expr_drop_all_data = NlImmExpr::DefaultDropAll();
+  std::vector<char> list_expr_data = NlListAttr()
+                                         .Add(imm_expr_accept_all_data)
+                                         .Add(imm_expr_drop_all_data)
+                                         .Build();
 
   AddDefaultTable({.fd = fd, .table_name = test_table_name, .seq = kSeq});
   AddDefaultBaseChain(
@@ -3089,7 +3096,6 @@ TEST(NetlinkNetfilterTest, GetRuleDump) {
         }
 
         EXPECT_TRUE(hdr->nlmsg_flags & NLM_F_MULTI);
-
         CheckNetfilterRuleAttributes({
             .hdr = hdr,
             .expected_table_name = test_table_name,
@@ -3097,6 +3103,8 @@ TEST(NetlinkNetfilterTest, GetRuleDump) {
             .expected_udata = udata,
             .expected_udata_size = &expected_udata_size,
             .skip_handle_check = true,
+            .expected_rule_exprs_data = std::vector<std::vector<char>>(
+                {imm_expr_accept_all_data, imm_expr_drop_all_data}),
         });
         rules_found++;
       },
@@ -3341,6 +3349,276 @@ TEST(NetlinkNetfilterTest, GetGenerationID) {
       },
       false));
 }
+
+struct RuleWithExprTestParams {
+  std::string test_name;
+  std::string expr_name;
+  NlNestedAttr expr_attrs;
+  int expected_error_no;
+};
+
+class AddRuleWithExprTest
+    : public ::testing::TestWithParam<RuleWithExprTestParams> {};
+
+TEST_P(AddRuleWithExprTest, AddRuleWithExpr) {
+  SKIP_IF(!ASSERT_NO_ERRNO_AND_VALUE(HaveCapability(CAP_NET_RAW)));
+  SKIP_IF(!IsRunningOnGvisor());
+  FileDescriptor fd =
+      ASSERT_NO_ERRNO_AND_VALUE(NetlinkBoundSocket(NETLINK_NETFILTER));
+  std::vector<char> expr_data = NlNestedAttr(GetParam().expr_attrs).Build();
+  ASSERT_FALSE(GetParam().expr_name.empty());
+  std::vector<char> rule_expr_data =
+      NlNestedAttr()
+          .StrAttr(NFTA_EXPR_NAME, GetParam().expr_name)
+          .RawAttr(NFTA_EXPR_DATA, expr_data.data(), expr_data.size())
+          .Build();
+  std::vector<char> list_expr_data = NlListAttr().Add(rule_expr_data).Build();
+  const std::string table_name =
+      absl::StrCat("table_", GetParam().expr_name, "_", GetParam().test_name);
+  const std::string chain_name = "test_chain";
+  std::vector<char> add_rule_request_buffer =
+      NlBatchReq()
+          .SeqStart(kSeq + 6)
+          .Req(NlReq("newrule req ack create inet")
+                   .Seq(kSeq + 7)
+                   .StrAttr(NFTA_RULE_TABLE, table_name)
+                   .StrAttr(NFTA_RULE_CHAIN, chain_name)
+                   .RawAttr(NFTA_RULE_EXPRESSIONS, list_expr_data.data(),
+                            list_expr_data.size())
+                   .Build())
+          .SeqEnd(kSeq + 8)
+          .Build();
+
+  AddDefaultTable({.fd = fd, .table_name = table_name, .seq = kSeq});
+  AddDefaultBaseChain({.fd = fd,
+                       .table_name = table_name,
+                       .chain_name = chain_name,
+                       .seq = kSeq + 3});
+
+  if (GetParam().expected_error_no != 0) {
+    ASSERT_THAT(NetlinkNetfilterBatchRequestAckOrError(
+                    fd, kSeq + 6, kSeq + 8, add_rule_request_buffer.data(),
+                    add_rule_request_buffer.size()),
+                PosixErrorIs(GetParam().expected_error_no, _));
+  } else {
+    ASSERT_NO_ERRNO(NetlinkNetfilterBatchRequestAckOrError(
+        fd, kSeq + 6, kSeq + 8, add_rule_request_buffer.data(),
+        add_rule_request_buffer.size()));
+  }
+}
+
+std::vector<RuleWithExprTestParams> GetPayloadRuleTestParams() {
+  return {
+      RuleWithExprTestParams{
+          .test_name = "LoadValid",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  .U32Attr(NFTA_PAYLOAD_DREG, NFT_REG_1)},
+      RuleWithExprTestParams{
+          .test_name = "SetValid",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG32_00)},
+      RuleWithExprTestParams{
+          .test_name = "SetWithCsumValid",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG_1)
+                  .U32Attr(NFTA_PAYLOAD_CSUM_TYPE, NFT_PAYLOAD_CSUM_INET)
+                  .U32Attr(NFTA_PAYLOAD_CSUM_OFFSET, 1)},
+      RuleWithExprTestParams{
+          .test_name = "LoadWithInvalidRegister",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  // Verdict register is not supported for payload load.
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG_VERDICT),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "LoadWithInvalidOffset",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, UINT32_MAX)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG_VERDICT),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "LoadWithInvalidLen",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, NFT_REG_SIZE + 1)
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG_VERDICT),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "SetWithInvalidBase",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, /* NFT_PAYLOAD_INNER_HEADER */ 3)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  .U32Attr(NFTA_PAYLOAD_DREG, NFT_REG_1),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "SetWithInvalidRegister",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, 4)
+                  .U32Attr(NFTA_PAYLOAD_DREG, NFT_REG_VERDICT),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "SetWithInvalidLen",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, NFT_REG_SIZE + 1)
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG_VERDICT),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "WithSregAndDregSet",
+          .expr_name = "payload",
+          .expr_attrs =
+              NlNestedAttr()
+                  .U32Attr(NFTA_PAYLOAD_BASE, NFT_PAYLOAD_NETWORK_HEADER)
+                  .U32Attr(NFTA_PAYLOAD_OFFSET, 1)
+                  .U32Attr(NFTA_PAYLOAD_LEN, NFT_REG_SIZE + 1)
+                  .U32Attr(NFTA_PAYLOAD_SREG, NFT_REG_1)
+                  .U32Attr(NFTA_PAYLOAD_DREG, NFT_REG_2),
+          .expected_error_no = EINVAL},
+  };
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PayloadRuleTest, AddRuleWithExprTest,
+    /*param_generator=*/ValuesIn(GetPayloadRuleTestParams()),
+    /*param_name_generator=*/
+    [](const TestParamInfo<RuleWithExprTestParams>& info) {
+      return info.param.test_name;
+    });
+
+std::vector<RuleWithExprTestParams> GetMetaRuleTestParams() {
+  return {
+      RuleWithExprTestParams{
+          .test_name = "GetValid",
+          .expr_name = "meta",
+          .expr_attrs = NlNestedAttr()
+                            .U32Attr(NFTA_META_DREG, NFT_REG_1)
+                            .U32Attr(NFTA_META_KEY, NFT_META_PKTTYPE)},
+      RuleWithExprTestParams{
+          .test_name = "SetValid",
+          .expr_name = "meta",
+          .expr_attrs = NlNestedAttr()
+                            .U32Attr(NFTA_META_DREG, NFT_REG_1)
+                            .U32Attr(NFTA_META_KEY, NFT_META_PKTTYPE)},
+      RuleWithExprTestParams{
+          .test_name = "WithSregAndDregSet",
+          .expr_name = "meta",
+          .expr_attrs = NlNestedAttr()
+                            .U32Attr(NFTA_META_DREG, NFT_REG_1)
+                            .U32Attr(NFTA_META_KEY, NFT_META_PKTTYPE)
+                            .U32Attr(NFTA_META_SREG, NFT_REG_2),
+          .expected_error_no = EINVAL},
+      RuleWithExprTestParams{
+          .test_name = "WithInvalidKey",
+          .expr_name = "meta",
+          .expr_attrs = NlNestedAttr()
+                            .U32Attr(NFTA_META_DREG, NFT_REG_1)
+                            .U32Attr(NFTA_META_KEY, 256),
+          .expected_error_no = EINVAL},
+  };
+}
+
+INSTANTIATE_TEST_SUITE_P(MetaRuleTest, AddRuleWithExprTest,
+                         /*param_generator=*/ValuesIn(GetMetaRuleTestParams()),
+                         /*param_name_generator=*/
+                         [](const TestParamInfo<RuleWithExprTestParams>& info) {
+                           return info.param.test_name;
+                         });
+
+std::vector<RuleWithExprTestParams> GetCmpRuleTestParams() {
+  return {
+      RuleWithExprTestParams{
+          .test_name = "Valid",
+          .expr_name = "cmp",
+          .expr_attrs =
+              []() {
+                std::vector<char> data_value =
+                    NlNestedAttr().U32Attr(NFTA_DATA_VALUE, 1).Build();
+                return NlNestedAttr()
+                    .U32Attr(NFTA_CMP_SREG, NFT_REG_1)
+                    .U32Attr(NFTA_CMP_OP, NFT_CMP_EQ)
+                    .RawAttr(NFTA_CMP_DATA, data_value.data(),
+                             data_value.size());
+              }()},
+      RuleWithExprTestParams{
+          .test_name = "InvalidCmpOp",
+          .expr_name = "cmp",
+          .expr_attrs = []() -> NlNestedAttr {
+            std::vector<char> data_value =
+                NlNestedAttr().U32Attr(NFTA_DATA_VALUE, 1).Build();
+            return NlNestedAttr()
+                .U32Attr(NFTA_CMP_SREG, NFT_REG_1)
+                // Invalid comparison operator as only 6 operators are
+                // supported.
+                .U32Attr(NFTA_CMP_OP, 100)
+                .RawAttr(NFTA_CMP_DATA, data_value.data(), data_value.size());
+          }(),
+          .expected_error_no = EINVAL},
+  };
+}
+
+INSTANTIATE_TEST_SUITE_P(CmpRuleTest, AddRuleWithExprTest,
+                         /*param_generator=*/ValuesIn(GetCmpRuleTestParams()),
+                         /*param_name_generator=*/
+                         [](const TestParamInfo<RuleWithExprTestParams>& info) {
+                           return info.param.test_name;
+                         });
+
+std::vector<RuleWithExprTestParams> GetCounterRuleTestParams() {
+  return {
+      RuleWithExprTestParams{.test_name = "ValidWithDefaultValues",
+                             .expr_name = "counter",
+                             .expr_attrs = NlNestedAttr()
+                                               .U64Attr(NFTA_COUNTER_PACKETS, 0)
+                                               .U64Attr(NFTA_COUNTER_BYTES, 0)},
+      RuleWithExprTestParams{.test_name = "ValidWithNoDefaultValues",
+                             .expr_name = "counter",
+                             .expr_attrs = NlNestedAttr()},
+  };
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    CounterRuleTest, AddRuleWithExprTest,
+    /*param_generator=*/::testing::ValuesIn(GetCounterRuleTestParams()),
+    /*param_name_generator=*/
+    [](const ::testing::TestParamInfo<RuleWithExprTestParams>& info) {
+      return info.param.test_name;
+    });
 
 }  // namespace
 

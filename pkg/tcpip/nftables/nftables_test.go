@@ -22,9 +22,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/rand"
+	"gvisor.dev/gvisor/pkg/sentry/socket/netlink/nlmsg"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/faketime"
@@ -2335,9 +2337,9 @@ func TestEvaluateCounter(t *testing.T) {
 				t.Fatalf("unexpected error for EvaluateHook for packet %d: %v", i, err)
 			}
 			// Checks whether the counter should have incremented for the packet.
-			expectedDBytes, expectedDPackets := int64(0), int64(0)
+			expectedDBytes, expectedDPackets := uint64(0), uint64(0)
 			if pkt.Network().SourceAddress() == desiredIpv4Address {
-				expectedDBytes, expectedDPackets = int64(pkt.Size()), 1
+				expectedDBytes, expectedDPackets = uint64(pkt.Size()), 1
 			}
 			// Checks that the counter incremented correctly.
 			newBytes := counter.bytes.Load()
@@ -3829,4 +3831,479 @@ func (*fixedReader) Read(buf []byte) (int, error) {
 		buf[i] = 1
 	}
 	return len(buf), nil
+}
+
+func createEmptyNlMsg() *nlmsg.Message {
+	m := nlmsg.NewMessage(linux.NetlinkMessageHeader{})
+	m.Put(&linux.NetFilterGenMsg{})
+	return m
+}
+
+func TestNfAttrParser(t *testing.T) {
+	tests := []struct {
+		name   string
+		msg    *nlmsg.Message
+		policy []NlaPolicy
+		want   map[uint16]nlmsg.BytesView
+	}{
+		{
+			name: "validAttrs",
+			msg: func() *nlmsg.Message {
+				m := createEmptyNlMsg()
+				m.PutAttr(linux.NFTA_TABLE_HANDLE, nlmsg.PutU32(123))
+				m.PutAttr(linux.NFTA_TABLE_USE, nlmsg.PutU64(1))
+				m.PutAttrString(linux.NFTA_TABLE_NAME, "test_table")
+				return m
+			}(),
+			policy: []NlaPolicy{
+				linux.NFTA_TABLE_HANDLE: {nlaType: linux.NLA_BE32, validator: AttrMaxValidator[uint32](256)},
+				linux.NFTA_TABLE_USE:    {nlaType: linux.NLA_U64, validator: AttrMaxValidator[uint64](nlmsg.HostToNetU64(1))},
+				linux.NFTA_TABLE_NAME:   {nlaType: linux.NLA_STRING},
+			},
+			want: map[uint16]nlmsg.BytesView{
+				linux.NFTA_TABLE_HANDLE: []byte{0, 0, 0, 123},           // Network byte order.
+				linux.NFTA_TABLE_USE:    []byte{0, 0, 0, 0, 0, 0, 0, 1}, // Network byte order.
+				// The string is expected to be null terminated.
+				linux.NFTA_TABLE_NAME: []byte{'t', 'e', 's', 't', '_', 't', 'a', 'b', 'l', 'e', '\x00'},
+			},
+		},
+		{
+			name: "attrsWithoutPolicy",
+			msg: func() *nlmsg.Message {
+				m := createEmptyNlMsg()
+				m.PutAttr(linux.NFTA_TABLE_HANDLE, nlmsg.PutU32(123))
+				m.PutAttr(linux.NFTA_TABLE_USE, nlmsg.PutU64(1))
+				return m
+			}(),
+			want: map[uint16]nlmsg.BytesView{
+				linux.NFTA_TABLE_HANDLE: []byte{0, 0, 0, 123},
+				linux.NFTA_TABLE_USE:    []byte{0, 0, 0, 0, 0, 0, 0, 1},
+			},
+		},
+		{
+			name: "attrGtThanMax",
+			msg: func() *nlmsg.Message {
+				m := createEmptyNlMsg()
+				m.PutAttr(linux.NFTA_TABLE_HANDLE, nlmsg.PutU32(123))
+				return m
+			}(),
+			policy: []NlaPolicy{
+				linux.NFTA_TABLE_HANDLE: {nlaType: linux.NLA_BE32, validator: AttrMaxValidator[uint32](1)},
+			},
+		},
+		{
+			name: "attrWithInvalidType",
+			msg: func() *nlmsg.Message {
+				m := createEmptyNlMsg()
+				m.PutAttr(linux.NFTA_TABLE_HANDLE, nlmsg.PutU16(123))
+				return m
+			}(),
+			policy: []NlaPolicy{
+				linux.NFTA_TABLE_HANDLE: {nlaType: linux.NLA_U32},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var nfGenMsg linux.NetFilterGenMsg
+			attr, ok := test.msg.GetData(&nfGenMsg)
+			if !ok {
+				t.Fatalf("GetData() failed for msg %v", test.msg)
+			}
+			got, gotOk := NfParseWithPolicy(attr, test.policy)
+			wantOk := test.want != nil
+			if wantOk != gotOk {
+				t.Fatalf("NfParseWithPolicy() failed, want ok: %v, got ok: %v", wantOk, gotOk)
+			}
+			if !wantOk {
+				return
+			}
+			if diff := cmp.Diff(test.want, got); diff != "" {
+				t.Fatalf("NfParseWithPolicy() returned diff (-want +got): %v", diff)
+			}
+		})
+	}
+}
+
+func TestAttrNetToHost(t *testing.T) {
+	const attr uint16 = 1
+	tests := []struct {
+		name   string
+		attrs  map[uint16]nlmsg.BytesView
+		wantOK bool
+		want   any
+	}{
+		{
+			name:   "uint8",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01})},
+			wantOK: true,
+			want:   any(uint8(0x01)),
+		},
+		{
+			name:   "uint16",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01, 0x02})},
+			wantOK: true,
+			want:   any(uint16(0x0102)),
+		},
+		{
+			name:   "uint32",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01, 0x02, 0x03, 0x04})},
+			wantOK: true,
+			want:   any(uint32(0x01020304)),
+		},
+		{
+			name:   "uint64",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08})},
+			wantOK: true,
+			want:   any(uint64(0x0102030405060708)),
+		},
+		{
+			name:   "empty",
+			attrs:  map[uint16]nlmsg.BytesView{},
+			wantOK: false,
+		},
+		{
+			name:   "invalidUint8",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{})},
+			wantOK: false,
+			want:   any(uint8(0)),
+		},
+		{
+			name:   "invalidUint16",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01})},
+			wantOK: false,
+			want:   any(uint16(0)),
+		},
+		{
+			name:   "invalidUint32",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01})},
+			wantOK: false,
+			want:   any(uint32(0)),
+		},
+		{
+			name:   "invalidUint64",
+			attrs:  map[uint16]nlmsg.BytesView{attr: nlmsg.BytesView([]byte{0x01})},
+			wantOK: false,
+			want:   any(uint64(0)),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got any
+			var gotOk bool
+			switch test.want.(type) {
+			case uint8:
+				got, gotOk = AttrNetToHost[uint8](attr, test.attrs)
+			case uint16:
+				got, gotOk = AttrNetToHost[uint16](attr, test.attrs)
+			case uint32:
+				got, gotOk = AttrNetToHost[uint32](attr, test.attrs)
+			case uint64:
+				got, gotOk = AttrNetToHost[uint64](attr, test.attrs)
+			}
+			if gotOk != test.wantOK {
+				t.Errorf("AttrNetToHost: got ok %v, want ok %v", gotOk, test.wantOK)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Errorf("AttrNetToHost: got 0x%x, want 0x%x", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDumpOperations(t *testing.T) {
+	tests := []struct {
+		name     string
+		op       operation
+		validate func([]byte) error
+	}{
+		{
+			name: "immediate",
+			op:   mustCreateImmediate(t, linux.NFT_REG_1 /*dreg*/, newBytesData([]byte{1, 2, 3, 4}) /*data*/),
+			validate: func(dump []byte) error {
+				attrs, ok := NfParse(dump)
+				if !ok {
+					return fmt.Errorf("failed to parse dumped attributes")
+				}
+				reg, ok := AttrNetToHost[uint32](linux.NFTA_IMMEDIATE_DREG, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get dreg value")
+				}
+				if reg != linux.NFT_REG_1 {
+					return fmt.Errorf("unexpected dreg value: %d, want %d", reg, linux.NFT_REG_1)
+				}
+				dataAttrs, ok := attrs[linux.NFTA_IMMEDIATE_DATA]
+				if !ok {
+					return fmt.Errorf("failed to find data attributes")
+				}
+				data, ok := NfParse(nlmsg.AttrsView(dataAttrs))
+				if !ok {
+					return fmt.Errorf("failed to parse data attributes")
+				}
+				dataVal, ok := data[linux.NFTA_DATA_VALUE]
+				if !ok {
+					return fmt.Errorf("failed to find data value")
+				}
+				if !slices.Equal(dataVal, []byte{1, 2, 3, 4}) {
+					return fmt.Errorf("unexpected data value: %v, want %v", dataVal, []byte{1, 2, 3, 4})
+				}
+				return nil
+			},
+		},
+		{
+			name: "comparison",
+			op:   mustCreateComparison(t, linux.NFT_REG_2 /*sreg*/, linux.NFT_CMP_LT /*cop*/, []byte{1, 2, 3, 4} /*data*/),
+			validate: func(dump []byte) error {
+				attrs, ok := NfParse(dump)
+				if !ok {
+					return fmt.Errorf("failed to parse dumped attributes")
+				}
+				reg, ok := AttrNetToHost[uint32](linux.NFTA_CMP_SREG, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get dreg value")
+				}
+				if reg != linux.NFT_REG_2 {
+					return fmt.Errorf("unexpected dreg value: %d, want %d", reg, linux.NFT_REG_2)
+				}
+				cop, ok := AttrNetToHost[uint32](linux.NFTA_CMP_OP, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get cop value")
+				}
+				if cop != linux.NFT_CMP_LT {
+					return fmt.Errorf("unexpected cop value: %d, want %d", cop, linux.NFT_CMP_EQ)
+				}
+				dataAttrs, ok := attrs[linux.NFTA_CMP_DATA]
+				if !ok {
+					return fmt.Errorf("failed to find data attributes")
+				}
+				data, ok := NfParse(nlmsg.AttrsView(dataAttrs))
+				if !ok {
+					return fmt.Errorf("failed to parse data attributes")
+				}
+				dataVal, ok := data[linux.NFTA_DATA_VALUE]
+				if !ok {
+					return fmt.Errorf("failed to find data value")
+				}
+				if !slices.Equal(dataVal, []byte{1, 2, 3, 4}) {
+					return fmt.Errorf("unexpected data value: %v, want %v", dataVal, []byte{1, 2, 3, 4})
+				}
+				return nil
+			},
+		},
+		{
+			name: "range",
+			op:   mustCreateRanged(t, linux.NFT_REG_1, linux.NFT_RANGE_EQ, []byte{1}, []byte{2}),
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for ranged operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+		{
+			name: "payloadLoad",
+			op:   mustCreatePayloadLoad(t, linux.NFT_PAYLOAD_NETWORK_HEADER /*base*/, 4 /*offset*/, 4 /*len*/, linux.NFT_REG_1 /*dreg*/),
+			validate: func(dump []byte) error {
+				attrs, ok := NfParse(dump)
+				if !ok {
+					return fmt.Errorf("failed to parse dumped attributes")
+				}
+				reg, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_DREG, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get dreg value")
+				}
+				if reg != linux.NFT_REG_1 {
+					return fmt.Errorf("unexpected dreg value: %d, want %d", reg, linux.NFT_REG_1)
+				}
+				base, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_BASE, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get base value")
+				}
+				if base != linux.NFT_PAYLOAD_NETWORK_HEADER {
+					return fmt.Errorf("unexpected base value: %d, want %d", base, linux.NFT_PAYLOAD_NETWORK_HEADER)
+				}
+				offset, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_OFFSET, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get offset value")
+				}
+				if offset != 4 {
+					return fmt.Errorf("unexpected offset value: %d, want %d", offset, 4)
+				}
+				len, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_LEN, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get len value")
+				}
+				if len != 4 {
+					return fmt.Errorf("unexpected len value: %d, want %d", len, 4)
+				}
+				return nil
+			},
+		},
+		{
+			name: "payloadSet",
+			op:   mustCreatePayloadSet(t, linux.NFT_PAYLOAD_NETWORK_HEADER /*base*/, 0 /*offset*/, 4 /*len*/, linux.NFT_REG_4 /*sreg*/, linux.NFT_PAYLOAD_CSUM_NONE /*csumType*/, 0 /*csumOff*/, 0 /*csumFlags*/),
+			validate: func(dump []byte) error {
+				attrs, ok := NfParse(dump)
+				if !ok {
+					return fmt.Errorf("failed to parse dumped attributes")
+				}
+				reg, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_SREG, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get sreg value")
+				}
+				if reg != linux.NFT_REG_4 {
+					return fmt.Errorf("unexpected sreg value: %d, want %d", reg, linux.NFT_REG_4)
+				}
+				base, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_BASE, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get base value")
+				}
+				if base != linux.NFT_PAYLOAD_NETWORK_HEADER {
+					return fmt.Errorf("unexpected base value: %d, want %d", base, linux.NFT_PAYLOAD_NETWORK_HEADER)
+				}
+				offset, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_OFFSET, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get offset value")
+				}
+				if offset != 0 {
+					return fmt.Errorf("unexpected offset value: %d, want %d", offset, 0)
+				}
+				len, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_LEN, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get len value")
+				}
+				if len != 4 {
+					return fmt.Errorf("unexpected len value: %d, want %d", len, 4)
+				}
+				csumType, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_CSUM_TYPE, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get csum type value")
+				}
+				if csumType != linux.NFT_PAYLOAD_CSUM_NONE {
+					return fmt.Errorf("unexpected csum type value: %d, want %d", csumType, linux.NFT_PAYLOAD_CSUM_NONE)
+				}
+				csumOffset, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_CSUM_OFFSET, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get csum offset value")
+				}
+				if csumOffset != 0 {
+					return fmt.Errorf("unexpected csum offset value: %d, want %d", csumOffset, 0)
+				}
+				csumFlags, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_CSUM_FLAGS, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get csum flags value")
+				}
+				if csumFlags != 0 {
+					return fmt.Errorf("unexpected csum flags value: %d, want %d", csumFlags, 0)
+				}
+				return nil
+			},
+		},
+		{
+			name: "bitwise",
+			op:   mustCreateBitwiseBool(t, linux.NFT_REG_1, linux.NFT_REG_2, []byte{0xff}, []byte{0x00}),
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for bitwise operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+		{
+			name: "byteorder",
+			op:   mustCreateByteorder(t, linux.NFT_REG_1, linux.NFT_REG_2, linux.NFT_BYTEORDER_NTOH, 4, 4),
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for byteorder operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+		{
+			name: "metaLoad",
+			op:   mustCreateMetaLoad(t, linux.NFT_META_LEN, linux.NFT_REG_1),
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for meta load operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+		{
+			name: "metaSet",
+			op:   mustCreateMetaSet(t, linux.NFT_META_PKTTYPE, linux.NFT_REG_1),
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for meta set operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+		{
+			name: "route",
+			op:   mustCreateRoute(t, linux.NFT_RT_NEXTHOP4, linux.NFT_REG_1),
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for route operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+		{
+			name: "counter",
+			op:   newCounter(10 /*bytes*/, 20 /*packets*/),
+			validate: func(dump []byte) error {
+				attrs, ok := NfParse(dump)
+				if !ok {
+					return fmt.Errorf("failed to parse dumped attributes")
+				}
+				bytes, ok := AttrNetToHost[uint64](linux.NFTA_COUNTER_BYTES, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get bytes value")
+				}
+				if bytes != 10 {
+					return fmt.Errorf("unexpected bytes value: %d, want %d", bytes, 10)
+				}
+				packets, ok := AttrNetToHost[uint64](linux.NFTA_COUNTER_PACKETS, attrs)
+				if !ok {
+					return fmt.Errorf("failed to get packets value")
+				}
+				if packets != 20 {
+					return fmt.Errorf("unexpected packets value: %d, want %d", packets, 20)
+				}
+				return nil
+			},
+		},
+		{
+			name: "last",
+			op:   &last{},
+			validate: func(dump []byte) error {
+				// TODO: b/452648112 - Implement validation for last operation when dump is implemented.
+				if dump != nil {
+					return fmt.Errorf("unexpected dump: %v, want nil", dump)
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dump, err := test.op.Dump()
+			if err != nil {
+				t.Fatalf("unexpected error for Dump(): %v", err)
+			}
+			if err := test.validate(dump); err != nil {
+				t.Errorf("validation failed: %v", err)
+			}
+		})
+	}
 }

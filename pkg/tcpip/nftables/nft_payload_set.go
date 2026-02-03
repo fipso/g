@@ -20,6 +20,7 @@ import (
 	"slices"
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
+	"gvisor.dev/gvisor/pkg/sentry/socket/netlink/nlmsg"
 	"gvisor.dev/gvisor/pkg/syserr"
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -181,4 +182,44 @@ func (op payloadSet) evaluate(regs *registerSet, pkt *stack.PacketBuffer, rule *
 			}
 		}
 	}
+}
+
+func (op payloadSet) GetExprName() string {
+	return "payload"
+}
+
+func (op payloadSet) Dump() ([]byte, *syserr.AnnotatedError) {
+	m := &nlmsg.Message{}
+	m.PutAttr(linux.NFTA_PAYLOAD_SREG, nlmsg.PutU32(uint32(op.sreg)))
+	m.PutAttr(linux.NFTA_PAYLOAD_BASE, nlmsg.PutU32(uint32(op.base)))
+	m.PutAttr(linux.NFTA_PAYLOAD_OFFSET, nlmsg.PutU32(uint32(op.offset)))
+	m.PutAttr(linux.NFTA_PAYLOAD_LEN, nlmsg.PutU32(uint32(op.blen)))
+	m.PutAttr(linux.NFTA_PAYLOAD_CSUM_TYPE, nlmsg.PutU32(uint32(op.csumType)))
+	m.PutAttr(linux.NFTA_PAYLOAD_CSUM_OFFSET, nlmsg.PutU32(uint32(op.csumOffset)))
+	m.PutAttr(linux.NFTA_PAYLOAD_CSUM_FLAGS, nlmsg.PutU32(uint32(op.csumFlags)))
+	return m.Buffer(), nil
+}
+
+func initPayloadSet(tab *Table, attrs map[uint16]nlmsg.BytesView) (*payloadSet, *syserr.AnnotatedError) {
+	base, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_BASE, attrs)
+	if !ok {
+		return nil, syserr.NewAnnotatedError(syserr.ErrInvalidArgument, "failed to parse NFTA_PAYLOAD_BASE attribute value")
+	}
+	offset, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_OFFSET, attrs)
+	if !ok {
+		return nil, syserr.NewAnnotatedError(syserr.ErrInvalidArgument, "failed to parse NFTA_PAYLOAD_OFFSET attribute value")
+	}
+	blen, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_LEN, attrs)
+	if !ok {
+		return nil, syserr.NewAnnotatedError(syserr.ErrInvalidArgument, "failed to parse NFTA_PAYLOAD_LEN attribute value")
+	}
+	sreg, ok := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_SREG, attrs)
+	if !ok {
+		return nil, syserr.NewAnnotatedError(syserr.ErrInvalidArgument, "failed to parse NFTA_PAYLOAD_SREG attribute value")
+	}
+	// Optional attributes; validation is not required.
+	csumType, _ := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_CSUM_TYPE, attrs)
+	csumOffset, _ := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_CSUM_OFFSET, attrs)
+	csumFlags, _ := AttrNetToHost[uint32](linux.NFTA_PAYLOAD_CSUM_FLAGS, attrs)
+	return newPayloadSet(payloadBase(base), uint8(offset), uint8(blen), uint8(sreg), uint8(csumType), uint8(csumOffset), uint8(csumFlags))
 }

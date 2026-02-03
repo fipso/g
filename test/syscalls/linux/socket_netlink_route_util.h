@@ -31,12 +31,14 @@ struct Link {
   std::string name;
   uint32_t mtu;
   std::string address;
+  unsigned int flags;
 };
 
 PosixError DumpLinks(const FileDescriptor& fd, uint32_t seq,
                      const std::function<void(const struct nlmsghdr* hdr)>& fn);
 
 PosixErrorOr<std::vector<Link>> DumpLinks();
+PosixErrorOr<std::vector<Link>> DumpLinks(const FileDescriptor& fd);
 
 // Returns the loopback link on the system. ENOENT if not found.
 PosixErrorOr<Link> LoopbackLink();

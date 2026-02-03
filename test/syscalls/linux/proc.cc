@@ -71,6 +71,7 @@
 #include "test/util/eventfd_util.h"
 #include "test/util/file_descriptor.h"
 #include "test/util/fs_util.h"
+#include "test/util/linux_capability_util.h"
 #include "test/util/memory_util.h"
 #include "test/util/mount_util.h"
 #include "test/util/multiprocess_util.h"
@@ -2972,6 +2973,63 @@ TEST(Proc, GetdentsEnoent) {
               SyscallFailsWithErrno(ENOENT));
 }
 
+TEST(ProcPid, AccessDeny) {
+  SKIP_IF(!ASSERT_NO_ERRNO_AND_VALUE(HaveCapability(CAP_SETUID)));
+
+  int pfds[2] = {};
+
+  ASSERT_THAT(pipe(pfds), SyscallSucceeds());
+
+  // Create child process
+  pid_t const child_pid = fork();
+  if (child_pid == 0) {
+    // Close writing end
+    TEST_PCHECK(close(pfds[1]) == 0);
+
+    char ok = 0;
+    // Await parent OK to die
+    TEST_CHECK(ReadFd(pfds[0], &ok, sizeof(ok)) == sizeof(ok));
+
+    _exit(0);
+  }
+
+  // In parent process.
+  ASSERT_THAT(child_pid, SyscallSucceeds());
+
+  ScopedThread([&] {
+    constexpr int kNobody = 65534;
+    ASSERT_THAT(syscall(SYS_setuid, kNobody), SyscallSucceeds());
+
+    // Attempt to open /proc/[child_pid]/environ
+    std::string path = absl::StrCat("/proc/", child_pid);
+    const FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(path, O_RDONLY));
+    EXPECT_THAT(openat(fd.get(), "auxv", O_RDONLY),
+                SyscallFailsWithErrno(EACCES));
+    EXPECT_THAT(openat(fd.get(), "environ", O_RDONLY),
+                SyscallFailsWithErrno(EACCES));
+    EXPECT_THAT(openat(fd.get(), "maps", O_RDONLY),
+                SyscallFailsWithErrno(EACCES));
+    EXPECT_THAT(openat(fd.get(), "smaps", O_RDONLY),
+                SyscallFailsWithErrno(EACCES));
+    EXPECT_THAT(openat(fd.get(), "fd", O_RDONLY),
+                SyscallFailsWithErrno(EACCES));
+    EXPECT_THAT(openat(fd.get(), "fd/0", O_RDONLY),
+                SyscallFailsWithErrno(EACCES));
+
+    // Tell proc its ok to go
+    EXPECT_THAT(close(pfds[0]), SyscallSucceeds());
+    char ok = 1;
+    EXPECT_THAT(WriteFd(pfds[1], &ok, sizeof(ok)),
+                SyscallSucceedsWithValue(sizeof(ok)));
+    EXPECT_THAT(close(pfds[1]), SyscallSucceeds());
+
+    // Expect termination
+    int status;
+    ASSERT_THAT(waitpid(child_pid, &status, 0), SyscallSucceeds());
+    EXPECT_EQ(status, 0);
+  });
+}
+
 void CheckSyscwFromIOFile(const std::string& path, const std::string& regex) {
   std::string output;
   ASSERT_NO_ERRNO(GetContents(path, &output));
@@ -3062,6 +3120,22 @@ TEST(Proc, PidReuse) {
   _exit(0);
 }
 
+TEST(ProcDevices, ExpectedLines) {
+  auto devices = ASSERT_NO_ERRNO_AND_VALUE(GetContents("/proc/devices"));
+  std::cout << "Contents of /proc/devices:\n" << devices;
+  // Expect to find:
+  // - The "Character devices:" header on the first line
+  // - "1 mem", for the "mem" character devices (/dev/null etc.)
+  // - The "Block devices:" header on a later line, prefixed by a blank line
+  // As of this writing, gVisor doesn't guarantee anything else.
+  EXPECT_EQ(devices.find("Character devices:\n"), 0);
+  auto memdev_idx = devices.find("1 mem\n");
+  EXPECT_NE(memdev_idx, std::string::npos);
+  auto blkdev_header_idx = devices.find("\n\nBlock devices:\n");
+  EXPECT_NE(blkdev_header_idx, std::string::npos);
+  EXPECT_LT(memdev_idx, blkdev_header_idx);
+}
+
 TEST(ProcFilesystems, ReadCapLastCap) {
   std::string lastCapStr =
       ASSERT_NO_ERRNO_AND_VALUE(GetContents("/proc/sys/kernel/cap_last_cap"));
@@ -3083,6 +3157,35 @@ TEST(ProcFilesystems, OverflowID) {
   const uint64_t defaultOverflowID = 65534;
   EXPECT_EQ(overflowGid, defaultOverflowID);
   EXPECT_EQ(overflowUid, defaultOverflowID);
+}
+
+TEST(ProcSysKernelKeysMax, Exists) {
+  auto maxkeys =
+      ASSERT_NO_ERRNO_AND_VALUE(GetContents("/proc/sys/kernel/keys/maxkeys"));
+  int32_t mk;
+  ASSERT_TRUE(absl::SimpleAtoi(maxkeys, &mk));
+  EXPECT_EQ(mk, 200);
+}
+
+TEST(ProcSysKernelKeysMax, InvalidMaxKeysValue) {
+  SKIP_IF(!ASSERT_NO_ERRNO_AND_VALUE(HaveCapability(CAP_SYS_ADMIN)));
+  ASSERT_THAT(SetContents("/proc/sys/kernel/keys/maxkeys", "-1"),
+              PosixErrorIs(EINVAL));
+  auto maxkeys =
+      ASSERT_NO_ERRNO_AND_VALUE(GetContents("/proc/sys/kernel/keys/maxkeys"));
+  int32_t mk;
+  ASSERT_TRUE(absl::SimpleAtoi(maxkeys, &mk));
+  EXPECT_EQ(mk, 200);
+}
+
+TEST(ProcSysKernelKeysMax, SetMaxKeys) {
+  SKIP_IF(!ASSERT_NO_ERRNO_AND_VALUE(HaveCapability(CAP_SYS_ADMIN)));
+  ASSERT_NO_ERRNO(SetContents("/proc/sys/kernel/keys/maxkeys", "100"));
+  auto maxkeys =
+      ASSERT_NO_ERRNO_AND_VALUE(GetContents("/proc/sys/kernel/keys/maxkeys"));
+  int32_t mk;
+  ASSERT_TRUE(absl::SimpleAtoi(maxkeys, &mk));
+  EXPECT_EQ(mk, 100);
 }
 
 }  // namespace

@@ -14,10 +14,15 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/types.h>
 
+#include <utility>
+
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "test/util/capability_util.h"
@@ -102,6 +107,29 @@ struct msgmax {
   char mtext[msgMax];
 };
 
+// MsgCopySupported returns true if MSG_COPY is supported.
+bool MsgCopySupported() {
+  // msgrcv(2) man page states that MSG_COPY flag is available only if the
+  // kernel was built with the CONFIG_CHECKPOINT_RESTORE option. If MSG_COPY
+  // is used when the kernel was configured without the option, msgrcv produces
+  // a ENOSYS error.
+  // To avoid test failure, we perform a small test using msgrcv, and skip the
+  // test if errno == ENOSYS. This means that the test will always run on
+  // gVisor, but may be skipped on native linux.
+
+  auto maybe_id = Msgget(IPC_PRIVATE, 0600);
+  if (!maybe_id.ok()) {
+    return false;
+  }
+  Queue queue(std::move(maybe_id.ValueOrDie()));
+  msgbuf buf{1, "Test message."};
+
+  msgsnd(queue.get(), &buf, sizeof(buf.mtext), 0);
+  return !(msgrcv(queue.get(), &buf, sizeof(buf.mtext) + 1, 0,
+                  MSG_COPY | IPC_NOWAIT) == -1 &&
+           errno == ENOSYS);
+}
+
 // Test simple creation and retrieval for msgget(2).
 TEST(MsgqueueTest, MsgGet) {
   const TempPath keyfile = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
@@ -158,18 +186,44 @@ TEST(MsgqueueTest, MsgOpEmpty) {
               SyscallSucceedsWithValue(0));
 }
 
+// Test that msgrcv will accept sizes greater than MSGMAX.
+TEST(MsgqueueTest, MsgOpReceiveMax) {
+  Queue queue = ASSERT_NO_ERRNO_AND_VALUE(Msgget(IPC_PRIVATE, 0600));
+
+  msgbuf buf{1, "A message."};
+  msgmax rcv;
+
+  ASSERT_THAT(msgsnd(queue.get(), &buf, sizeof(buf.mtext), 0),
+              SyscallSucceeds());
+  EXPECT_THAT(msgrcv(queue.get(), &rcv, msgMax + 1, 0, 0),
+              SyscallSucceedsWithValue(sizeof(buf.mtext)));
+}
+
 // Test truncation of message with MSG_NOERROR flag.
 TEST(MsgqueueTest, MsgOpTruncate) {
   Queue queue = ASSERT_NO_ERRNO_AND_VALUE(Msgget(IPC_PRIVATE, 0600));
 
   msgbuf buf{1, ""};
+  RandomizeBuffer(buf.mtext, sizeof(buf.mtext));
   msgbuf rcv;
+  memset(rcv.mtext, 0, sizeof(rcv.mtext));
 
   ASSERT_THAT(msgsnd(queue.get(), &buf, sizeof(buf.mtext), 0),
               SyscallSucceeds());
 
-  EXPECT_THAT(msgrcv(queue.get(), &rcv, sizeof(buf.mtext) - 1, 0, MSG_NOERROR),
+  ASSERT_THAT(msgrcv(queue.get(), &rcv, sizeof(buf.mtext) - 1, 0, MSG_NOERROR),
               SyscallSucceedsWithValue(sizeof(buf.mtext) - 1));
+  EXPECT_EQ(buf.mtype, rcv.mtype);
+  EXPECT_EQ(memcmp(buf.mtext, rcv.mtext, sizeof(buf.mtext) - 1), 0);
+  // The final byte of rcv.mtext (set by memset() above) should not have been
+  // overwritten by msgrcv().
+  EXPECT_EQ(rcv.mtext[sizeof(rcv.mtext) - 1], 0);
+
+  // The queue should now be empty despite the truncation.
+  struct msqid_ds ds;
+  ASSERT_THAT(msgctl(queue.get(), IPC_STAT, &ds), SyscallSucceeds());
+  EXPECT_EQ(ds.msg_cbytes, 0);
+  EXPECT_EQ(ds.msg_qnum, 0);
 }
 
 // Test msgsnd and msgrcv using invalid arguments.
@@ -307,6 +361,11 @@ TEST(MsgqueueTest, MsgOpPermissions) {
               SyscallFailsWithErrno(EACCES));
   EXPECT_THAT(msgrcv(queue.get(), &buf, sizeof(buf.mtext), 0, 0),
               SyscallFailsWithErrno(EACCES));
+  if (MsgCopySupported()) {
+    EXPECT_THAT(
+        msgrcv(queue.get(), &buf, sizeof(buf.mtext), 0, MSG_COPY | IPC_NOWAIT),
+        SyscallFailsWithErrno(EACCES));
+  }
 }
 
 // Test limits for messages and queues.
@@ -327,29 +386,6 @@ TEST(MsgqueueTest, MsgOpLimits) {
   }
   EXPECT_THAT(msgsnd(queue.get(), &limit, sizeof(limit.mtext), IPC_NOWAIT),
               SyscallFailsWithErrno(EAGAIN));
-}
-
-// MsgCopySupported returns true if MSG_COPY is supported.
-bool MsgCopySupported() {
-  // msgrcv(2) man page states that MSG_COPY flag is available only if the
-  // kernel was built with the CONFIG_CHECKPOINT_RESTORE option. If MSG_COPY
-  // is used when the kernel was configured without the option, msgrcv produces
-  // a ENOSYS error.
-  // To avoid test failure, we perform a small test using msgrcv, and skip the
-  // test if errno == ENOSYS. This means that the test will always run on
-  // gVisor, but may be skipped on native linux.
-
-  auto maybe_id = Msgget(IPC_PRIVATE, 0600);
-  if (!maybe_id.ok()) {
-    return false;
-  }
-  Queue queue(std::move(maybe_id.ValueOrDie()));
-  msgbuf buf{1, "Test message."};
-
-  msgsnd(queue.get(), &buf, sizeof(buf.mtext), 0);
-  return !(msgrcv(queue.get(), &buf, sizeof(buf.mtext) + 1, 0,
-                  MSG_COPY | IPC_NOWAIT) == -1 &&
-           errno == ENOSYS);
 }
 
 // Test msgrcv using MSG_COPY.
@@ -411,6 +447,24 @@ TEST(MsgqueueTest, MsgCopyInvalidIndex) {
 
   EXPECT_THAT(msgrcv(queue.get(), &rcv, msgSize, 5, MSG_COPY | IPC_NOWAIT),
               SyscallFailsWithErrno(ENOMSG));
+}
+
+// Test msgrcv using MSG_COPY and (attempted) truncation.
+TEST(MsgqueueTest, MsgCopyTooBig) {
+  SKIP_IF(!MsgCopySupported());
+
+  Queue queue = ASSERT_NO_ERRNO_AND_VALUE(Msgget(IPC_PRIVATE, 0600));
+
+  msgbuf buf{1, ""};
+  ASSERT_THAT(msgsnd(queue.get(), &buf, sizeof(buf.mtext), 0),
+              SyscallSucceeds());
+
+  EXPECT_THAT(msgrcv(queue.get(), &buf, sizeof(buf.mtext) - 1, 0,
+                     MSG_COPY | IPC_NOWAIT),
+              SyscallFailsWithErrno(E2BIG));
+  EXPECT_THAT(msgrcv(queue.get(), &buf, sizeof(buf.mtext) - 1, 0,
+                     MSG_COPY | IPC_NOWAIT | MSG_NOERROR),
+              SyscallFailsWithErrno(EINVAL));
 }
 
 // Test msgrcv (most probably) blocking on an empty queue.

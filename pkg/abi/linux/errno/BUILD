@@ -8,5 +8,6 @@ package(
 go_library(
     name = "errno",
     srcs = ["errno.go"],
+    hostlayout = True,
     visibility = ["//visibility:public"],
 )

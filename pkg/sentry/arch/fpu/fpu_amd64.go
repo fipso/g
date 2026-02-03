@@ -25,6 +25,7 @@ import (
 	"gvisor.dev/gvisor/pkg/cpuid"
 	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/hostarch"
+	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/safecopy"
 	"gvisor.dev/gvisor/pkg/sync"
 )
@@ -60,11 +61,36 @@ const (
 const (
 	// XFEATURE_MASK_FPSSE is xsave features that are always enabled in
 	// signal frame fpstate.
-	XFEATURE_MASK_FPSSE = 0x3
+	XFEATURE_MASK_FPSSE = cpuid.XSAVEFeatureX87 | cpuid.XSAVEFeatureSSE
 
 	// FXSAVE_AREA_SIZE is the size of the FXSAVE area.
 	FXSAVE_AREA_SIZE = 512
 )
+
+// LINT.IfChange
+const (
+	// SupportedXFeatureStates contains all xfeatures supported right now.
+	//
+	// TODO(gvisor.dev/issues/9896): Implement AMX support.
+	// TODO(gvisor.dev/issues/10087): Implement PKRU support.
+	SupportedXFeatureStates = cpuid.XSAVEFeatureX87 |
+		cpuid.XSAVEFeatureSSE |
+		cpuid.XSAVEFeatureAVX |
+		cpuid.XSAVEFeatureAVX512op |
+		cpuid.XSAVEFeatureAVX512zmm0 |
+		cpuid.XSAVEFeatureAVX512zmm16
+
+	// ignoredXFeatureStates contains those xfeatures that may be
+	// present in a buffer but are safe to skip during restore.
+	//
+	// Intel MPX deprecated in the Linux kernel.
+	// PKRU states could be leaked. This issue was fixed in the 6.6 kernel.
+	ignoredXFeatureStates = cpuid.XSAVEFeatureBNDREGS |
+		cpuid.XSAVEFeatureBNDCSR |
+		cpuid.XSAVEFeaturePKRU
+)
+
+// LINT.ThenChange(../../platform/systrap/sysmsg/sysmsg_offsets.h)
 
 // initX86FPState (defined in asm files) sets up initial state.
 func initX86FPState(data *byte, useXsave bool)
@@ -261,8 +287,11 @@ func (s *State) PtraceSetXstateRegs(src io.Reader, maxlen int, featureSet cpuid.
 	return n, nil
 }
 
+var warnDisallowedXFeatureOnce sync.Once
+
 // SanitizeUser mutates s to ensure that restoring it is safe.
-func (s *State) SanitizeUser(featureSet cpuid.FeatureSet) {
+func (s *State) SanitizeUser(featureSet cpuid.FeatureSet) error {
+	var err error
 	f := *s
 
 	// Force reserved bits in MXCSR to 0. This is consistent with Linux.
@@ -270,13 +299,34 @@ func (s *State) SanitizeUser(featureSet cpuid.FeatureSet) {
 
 	if len(f) >= minXstateBytes {
 		// Users can't enable *more* XCR0 bits than what we, and the CPU, support.
-		xstateBV := hostarch.ByteOrder.Uint64(f[xstateBVOffset:])
-		xstateBV &= featureSet.ValidXCR0Mask()
+		xstateBV := hostarch.ByteOrder.Uint64(f[xstateBVOffset:]) &^ ignoredXFeatureStates
+		allowedMask := featureSet.ValidXCR0Mask() & SupportedXFeatureStates
+		if disallowedXstateBV := xstateBV &^ allowedMask; disallowedXstateBV != 0 {
+			// FIXME: b/478302010, b/478302512: If the app is using features
+			// that are not present in the app feature set, but supported by
+			// gVisor and the CPU, log a warning but permit the feature use.
+			// (Features are removed from app feature sets to support cross-CPU
+			// migration, not for security reasons; so if we observe the app
+			// using supported but disallowed features then it may no longer be
+			// migratable cross-CPU, but it's still better to not crash the
+			// app.)
+			supportedMask := cpuid.HostFeatureSet().ValidXCR0Mask() & SupportedXFeatureStates
+			if unsupportedXstateBV := xstateBV &^ supportedMask; unsupportedXstateBV == 0 {
+				warnDisallowedXFeatureOnce.Do(func() {
+					log.Warningf("Application using supported but disallowed xfeatures %#x", disallowedXstateBV)
+				})
+				xstateBV &= supportedMask
+			} else {
+				err = fmt.Errorf("xfeatures %#x disallowed, %#x unsupported", disallowedXstateBV, unsupportedXstateBV)
+				xstateBV &= allowedMask
+			}
+		}
 		hostarch.ByteOrder.PutUint64(f[xstateBVOffset:], xstateBV)
 		// Force XCOMP_BV and reserved bytes in the XSAVE header to 0.
 		reserved := f[xsaveHeaderZeroedOffset : xsaveHeaderZeroedOffset+xsaveHeaderZeroedBytes]
 		clear(reserved)
 	}
+	return err
 }
 
 var (
@@ -357,7 +407,7 @@ func (s *State) AfterLoad() {
 	supportedBV := fxsaveBV
 	hostFeatureSet := cpuid.HostFeatureSet()
 	if hostFeatureSet.UseXsave() {
-		supportedBV = hostFeatureSet.ValidXCR0Mask()
+		supportedBV = hostFeatureSet.ValidXCR0Mask() & SupportedXFeatureStates
 	}
 
 	// What was in use?
@@ -367,7 +417,7 @@ func (s *State) AfterLoad() {
 	}
 
 	// Supported features must be a superset of saved features.
-	if savedBV&^supportedBV != 0 {
+	if savedBV&^(supportedBV|ignoredXFeatureStates) != 0 {
 		panic(ErrLoadingState{supportedFeatures: supportedBV, savedFeatures: savedBV})
 	}
 

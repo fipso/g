@@ -12,11 +12,13 @@ go_library(
         "annotations.go",
         "checklocks.go",
         "facts.go",
+        "importfacts.go",
         "state.go",
     ],
     nogo = False,
     visibility = [
         "//:__pkg__",
+        "//go/tools/blazechecker:__subpackages__",  # experimental usage, don't expect compatibility or support
         "//tools/checklocks/cmd:__subpackages__",
         "//tools/nogo:__subpackages__",
     ],

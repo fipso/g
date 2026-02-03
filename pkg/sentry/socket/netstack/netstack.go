@@ -50,7 +50,6 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/sockfs"
 	"gvisor.dev/gvisor/pkg/sentry/inet"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
-	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/ktime"
 	"gvisor.dev/gvisor/pkg/sentry/memmap"
 	"gvisor.dev/gvisor/pkg/sentry/socket"
@@ -461,7 +460,7 @@ func New(t *kernel.Task, family int, skType linux.SockType, protocol int, queue 
 	}
 	s.LockFD.Init(&vfs.FileLocks{})
 	vfsfd := &s.vfsfd
-	if err := vfsfd.Init(s, linux.O_RDWR, mnt, d, &vfs.FileDescriptionOptions{
+	if err := vfsfd.Init(s, linux.O_RDWR, t.Credentials(), mnt, d, &vfs.FileDescriptionOptions{
 		DenyPRead:         true,
 		DenyPWrite:        true,
 		UseDentryMetadata: true,
@@ -491,10 +490,7 @@ func (s *sock) Release(ctx context.Context) {
 		// CLOSING and LAST_ACK.
 		// 2. Timeout is reached.
 		if v.Enabled && v.Timeout != 0 {
-			t := kernel.TaskFromContext(ctx)
-			start := t.Kernel().MonotonicClock().Now()
-			deadline := start.Add(v.Timeout)
-			_ = t.BlockWithDeadline(ch, true, deadline)
+			_, _ = ctx.BlockWithTimeout(ch, true, v.Timeout)
 		}
 	}
 	s.namespace.DecRef(ctx)
@@ -2012,7 +2008,7 @@ func setSockOptSocket(t *kernel.Task, s socket.Socket, ep commonEndpoint, name i
 			return syserr.ErrInvalidArgument
 		}
 
-		if creds := auth.CredentialsFromContext(t); !creds.HasCapability(linux.CAP_NET_ADMIN) {
+		if !t.HasRootCapability(linux.CAP_NET_ADMIN) {
 			return syserr.ErrNotPermitted
 		}
 

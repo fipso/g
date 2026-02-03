@@ -25,7 +25,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
+#include "absl/types/span.h"
 #include "test/util/file_descriptor.h"
 #include "test/util/posix_error.h"
 
@@ -34,6 +36,10 @@ namespace testing {
 
 // Returns a bound netlink socket.
 PosixErrorOr<FileDescriptor> NetlinkBoundSocket(int protocol);
+
+// Returns a bound netlink socket.
+PosixErrorOr<FileDescriptor> NetlinkBoundSocket(int protocol,
+                                                const struct sockaddr_nl* addr);
 
 // Returns the port ID of the passed socket.
 PosixErrorOr<uint32_t> NetlinkPortID(int fd);
@@ -86,6 +92,19 @@ void InitNetlinkAttr(struct nlattr* attr, int payload_size, uint16_t attr_type);
 // Helper function to find a netlink attribute in a message.
 const struct nfattr* FindNfAttr(const struct nlmsghdr* hdr,
                                 const struct nfgenmsg* msg, int16_t attr);
+
+// Helper function to parse a raw buffer of netlink attributes.
+// Returns a vector of pointers to the found attributes.
+std::vector<const struct nfattr*> ParseNfAttrs(
+    absl::Span<const char> attributes);
+
+inline sockaddr* AsSockAddr(sockaddr_nl* s) {
+  return reinterpret_cast<sockaddr*>(s);
+}
+inline const sockaddr* AsSockAddr(const sockaddr_nl* s) {
+  return reinterpret_cast<const sockaddr*>(s);
+}
+
 }  // namespace testing
 }  // namespace gvisor
 

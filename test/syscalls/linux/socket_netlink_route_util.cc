@@ -261,7 +261,10 @@ PosixError DumpLinks(
 
 PosixErrorOr<std::vector<Link>> DumpLinks() {
   ASSIGN_OR_RETURN_ERRNO(FileDescriptor fd, NetlinkBoundSocket(NETLINK_ROUTE));
+  return DumpLinks(fd);
+}
 
+PosixErrorOr<std::vector<Link>> DumpLinks(const FileDescriptor& fd) {
   std::vector<Link> links;
   RETURN_IF_ERRNO(DumpLinks(fd, kSeq, [&](const struct nlmsghdr* hdr) {
     if (hdr->nlmsg_type != RTM_NEWLINK ||
@@ -290,6 +293,7 @@ PosixErrorOr<std::vector<Link>> DumpLinks() {
         rta_address == nullptr
             ? ""
             : std::string(reinterpret_cast<const char*>(RTA_DATA(rta_address)));
+    links.back().flags = msg->ifi_flags;
   }));
   return links;
 }

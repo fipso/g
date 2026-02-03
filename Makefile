@@ -249,6 +249,9 @@ integration-tests: docker-tests overlay-tests hostnet-tests swgso-tests
 integration-tests: do-tests kvm-tests containerd-tests-min
 .PHONY: integration-tests
 
+integration-test-images: load-image-test load-basic
+.PHONY: integration-test-images
+
 network-tests: ## Run all networking integration tests.
 network-tests: iptables-tests packetdrill-tests packetimpact-tests
 .PHONY: network-tests
@@ -296,7 +299,7 @@ gpu-smoke-images: load-gpu_cuda-tests load-gpu_cuda-tests-12-8
 
 gpu-smoke-tests: gpu-smoke-images $(RUNTIME_BIN)
 	@$(call sudo,test/gpu:smoke_test,--runtime=runc -test.v $(ARGS))
-	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-docker=true)
+	@$(call install_runtime,$(RUNTIME),--nvproxy=true)
 	@$(call sudo,test/gpu:smoke_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 .PHONY: gpu-smoke-tests
 
@@ -317,13 +320,13 @@ l4-gpu-images: load-gpu_sglang load-gpu_sglang_client load-gpu_triton load-gpu_t
 .PHONY: l4-gpu-images
 
 l4-gpu-tests: l4-gpu-images $(RUNTIME_BIN)
-	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-docker=true --nvproxy-allowed-driver-capabilities=all)
+	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-allowed-driver-capabilities=all)
 	@$(call sudo,test/gpu:sglang_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 	@$(call sudo,test/gpu:triton_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 .PHONY: l4-gpu-tests
 
 gpu-all-tests: gpu-images gpu-smoke-tests $(RUNTIME_BIN)
-	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-docker=true --nvproxy-allowed-driver-capabilities=all)
+	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-allowed-driver-capabilities=all)
 	@$(call sudo,test/gpu:pytorch_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 	@$(call sudo,test/gpu:textgen_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 	@$(call sudo,test/gpu:imagegen_test,--runtime=$(RUNTIME) -test.v $(ARGS))
@@ -348,12 +351,12 @@ cos-gpu-all-tests: gpu-images cos-gpu-smoke-tests $(RUNTIME_BIN)
 .PHONY: cos-gpu-all-tests
 
 cuda-tests: load-basic_alpine load-gpu_cuda-tests $(RUNTIME_BIN)
-	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-docker=true --nvproxy-allowed-driver-capabilities=all)
+	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-allowed-driver-capabilities=all)
 	@$(call sudo,test/gpu:cuda_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 .PHONY: cuda-tests
 
 cuda-12-8-tests: load-basic_alpine load-gpu_cuda-tests-12-8 $(RUNTIME_BIN)
-	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-docker=true --nvproxy-allowed-driver-capabilities=all)
+	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-allowed-driver-capabilities=all)
 	@$(call sudo,test/gpu:cuda_12_8_test,--runtime=$(RUNTIME) -test.v $(ARGS))
 .PHONY: cuda-tests
 
@@ -367,9 +370,9 @@ portforward-tests: load-basic_redis load-basic_nginx $(RUNTIME_BIN)
 # Standard integration targets.
 INTEGRATION_TARGETS := //test/image:image_test //test/e2e:integration_test
 
-docker-tests: load-basic $(RUNTIME_BIN)
+docker-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME),) # Clear flags.
-	@$(call install_runtime,$(RUNTIME)-docker,--net-raw) # Used by TestDocker*.
+	@$(call install_runtime,$(RUNTIME)-docker,--net-raw --allow-packet-socket-write) # Used by TestDocker*.
 	@$(call install_runtime,$(RUNTIME)-fdlimit,--fdlimit=2000) # Used by TestRlimitNoFile.
 	@$(call install_runtime,$(RUNTIME)-dcache,--fdlimit=2000 --dcache=100) # Used by TestDentryCacheLimit.
 	@$(call install_runtime,$(RUNTIME)-host-uds,--host-uds=all) # Used by TestHostSocketConnect.
@@ -378,41 +381,41 @@ docker-tests: load-basic $(RUNTIME_BIN)
 	@$(call test_runtime_cached,$(RUNTIME),$(INTEGRATION_TARGETS) --test_env=TEST_SAVE_RESTORE_NETSTACK=true //test/e2e:integration_runtime_test //test/e2e:runtime_in_docker_test)
 .PHONY: docker-tests
 
-plugin-network-tests: load-basic $(RUNTIME_BIN)
+plugin-network-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-dpdk,--network=plugin)
 	@$(call test_runtime_cached,$(RUNTIME)-dpdk, --test_arg=-test.run=ConnectToSelf $(INTEGRATION_TARGETS))
 
 plugin-network-tests: RUNSC_TARGET=--config plugin-tldk //runsc:runsc-plugin-stack
 
-overlay-tests: load-basic $(RUNTIME_BIN)
+overlay-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-overlay,--overlay2=all:dir=/tmp)
-	@$(call install_runtime,$(RUNTIME)-overlay-docker,--net-raw --overlay2=all:dir=/tmp)
+	@$(call install_runtime,$(RUNTIME)-overlay-docker,--net-raw --allow-packet-socket-write --overlay2=all:dir=/tmp)
 	@$(call test_runtime_cached,$(RUNTIME)-overlay,--test_env=TEST_OVERLAY=true $(INTEGRATION_TARGETS))
 .PHONY: overlay-tests
 
-swgso-tests: load-basic $(RUNTIME_BIN)
+swgso-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-swgso,--software-gso=true --gso=false)
-	@$(call install_runtime,$(RUNTIME)-swgso-docker,--net-raw --software-gso=true --gso=false)
+	@$(call install_runtime,$(RUNTIME)-swgso-docker,--net-raw --allow-packet-socket-write --software-gso=true --gso=false)
 	@$(call test_runtime_cached,$(RUNTIME)-swgso,$(INTEGRATION_TARGETS))
 .PHONY: swgso-tests
 
-hostnet-tests: load-basic $(RUNTIME_BIN)
+hostnet-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-hostnet,--network=host --net-raw)
 	@$(call test_runtime_cached,$(RUNTIME)-hostnet,--test_env=TEST_CHECKPOINT=false --test_env=TEST_HOSTNET=true --test_env=TEST_NET_RAW=true $(INTEGRATION_TARGETS))
 .PHONY: hostnet-tests
 
-kvm-tests: load-basic $(RUNTIME_BIN)
+kvm-tests: integration-test-images $(RUNTIME_BIN)
 	@(lsmod | grep -E '^(kvm_intel|kvm_amd)') || sudo modprobe kvm
 	@if ! test -w /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
 	@$(call test,//pkg/sentry/platform/kvm:kvm_test)
 	@$(call install_runtime,$(RUNTIME)-kvm,--platform=kvm)
-	@$(call install_runtime,$(RUNTIME)-kvm-docker,--net-raw --platform=kvm)
+	@$(call install_runtime,$(RUNTIME)-kvm-docker,--net-raw --allow-packet-socket-write --platform=kvm)
 	@$(call test_runtime_cached,$(RUNTIME)-kvm,$(INTEGRATION_TARGETS))
 .PHONY: kvm-tests
 
-systrap-tests: load-basic $(RUNTIME_BIN)
+systrap-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-systrap,--platform=systrap)
-	@$(call install_runtime,$(RUNTIME)-systrap-docker,--net-raw --platform=systrap)
+	@$(call install_runtime,$(RUNTIME)-systrap-docker,--net-raw --allow-packet-socket-write --platform=systrap)
 	@$(call test_runtime_cached,$(RUNTIME)-systrap,$(INTEGRATION_TARGETS))
 .PHONY: systrap-tests
 
@@ -432,9 +435,19 @@ iptables-tests: load-iptables $(RUNTIME_BIN)
 nftables-tests: load-nftables $(RUNTIME_BIN)
 	@sudo modprobe nfnetlink
 	@sudo modprobe nf_tables
+	@$(call test,--test_env=RUNTIME=runc //test/nftables:nftables_test) # run with runc
 	@$(call install_runtime,$(RUNTIME),--net-raw --TESTONLY-nftables)
-	@$(call test_runtime,$(RUNTIME),--test_env=TEST_NET_RAW=true //test/nftables:nftables_test)
+	@$(call test_runtime,$(RUNTIME),--test_env=TEST_NET_RAW=true //test/nftables:nftables_test) # run with runsc
 .PHONY: nftables-tests
+
+# Runs the socket_netlink_netfilter_test with runc as root user in a docker
+# container.
+nftables-syscall-runc-tests: load-nftables
+	@sudo modprobe nfnetlink
+	@sudo modprobe nf_tables
+	@# Overrides the default `--user` flag of DOCKER_RUN_OPTIONS to run as root.
+	@$(call build_paths,//test/syscalls/linux:socket_netlink_netfilter_test,docker run $(DOCKER_RUN_OPTIONS) --user 0:0 --runtime runc --rm gvisor.dev/images/nftables {})
+.PHONY: nftables-syscall-runc-tests
 
 packetdrill-tests: load-packetdrill $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME),) # Clear flags.
@@ -470,19 +483,7 @@ else
 		sudo tar -C "$$(dirname $$(which containerd))" -zxvf - containerd-shim-runsc-v1
 endif
 	@$(call sudo,test/root:root_test,--runtime=$(RUNTIME) -test.v)
-containerd-tests-min: containerd-test-1.4.12
-
-##
-## Containerd tests.
-##
-## Runs all supported containerd version tests. Update as new versions become
-## available.
-##
-containerd-tests:
-containerd-tests: containerd-test-1.4.12
-containerd-tests: containerd-test-1.5.11
-containerd-tests: containerd-test-1.6.2
-containerd-tests: containerd-test-1.7.25
+containerd-tests-min: containerd-test-1.6.2
 
 ##
 ## Benchmarks.

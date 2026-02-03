@@ -78,12 +78,12 @@ func (e *connectionlessEndpoint) Close(ctx context.Context) {
 }
 
 // BidirectionalConnect implements BoundEndpoint.BidirectionalConnect.
-func (e *connectionlessEndpoint) BidirectionalConnect(ctx context.Context, ce ConnectingEndpoint, returnConnect func(Receiver, ConnectedEndpoint), opts UnixSocketOpts) *syserr.Error {
+func (e *connectionlessEndpoint) BidirectionalConnect(ctx context.Context, ce ConnectingEndpoint, returnConnect func(Receiver, ConnectedEndpoint)) *syserr.Error {
 	return syserr.ErrConnectionRefused
 }
 
 // UnidirectionalConnect implements BoundEndpoint.UnidirectionalConnect.
-func (e *connectionlessEndpoint) UnidirectionalConnect(ctx context.Context, opts UnixSocketOpts) (ConnectedEndpoint, *syserr.Error) {
+func (e *connectionlessEndpoint) UnidirectionalConnect(ctx context.Context) (ConnectedEndpoint, *syserr.Error) {
 	e.Lock()
 	r := e.receiver
 	e.Unlock()
@@ -107,8 +107,7 @@ func (e *connectionlessEndpoint) SendMsg(ctx context.Context, data [][]byte, c C
 		return e.baseEndpoint.SendMsg(ctx, data, c, nil)
 	}
 
-	opts := UnixSocketOpts{}
-	connected, err := to.UnidirectionalConnect(ctx, opts)
+	connected, err := to.UnidirectionalConnect(ctx)
 	if err != nil {
 		return 0, nil, syserr.ErrInvalidEndpointState
 	}
@@ -132,8 +131,8 @@ func (e *connectionlessEndpoint) Type() linux.SockType {
 }
 
 // Connect attempts to connect directly to server.
-func (e *connectionlessEndpoint) Connect(ctx context.Context, server BoundEndpoint, opts UnixSocketOpts) *syserr.Error {
-	connected, err := server.UnidirectionalConnect(ctx, opts)
+func (e *connectionlessEndpoint) Connect(ctx context.Context, server BoundEndpoint) *syserr.Error {
+	connected, err := server.UnidirectionalConnect(ctx)
 	if err != nil {
 		return err
 	}
@@ -154,7 +153,7 @@ func (*connectionlessEndpoint) Listen(context.Context, int) *syserr.Error {
 }
 
 // Accept accepts a new connection.
-func (*connectionlessEndpoint) Accept(context.Context, *Address, UnixSocketOpts) (Endpoint, *syserr.Error) {
+func (*connectionlessEndpoint) Accept(context.Context, *Address) (Endpoint, *syserr.Error) {
 	return nil, syserr.ErrNotSupported
 }
 

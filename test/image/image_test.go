@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"github.com/docker/docker/api/types/mount"
 	yaml "gopkg.in/yaml.v3"
 	"gvisor.dev/gvisor/pkg/test/dockerutil"
 	"gvisor.dev/gvisor/pkg/test/testutil"
@@ -274,6 +273,14 @@ func TestTomcat(t *testing.T) {
 	}
 }
 
+func dockerLogs(ctx context.Context, d *dockerutil.Container) string {
+	logs, err := d.Logs(ctx)
+	if err != nil {
+		return fmt.Sprintf("Failed to get docker logs: %v", err)
+	}
+	return fmt.Sprintf("\n%s", logs)
+}
+
 func TestRuby(t *testing.T) {
 	ctx := context.Background()
 	d := dockerutil.MakeContainer(ctx, t)
@@ -282,10 +289,10 @@ func TestRuby(t *testing.T) {
 	// Execute the ruby workload.
 	port := 8080
 	opts := dockerutil.RunOpts{
-		Image: "basic/ruby",
+		Image: "image-test/ruby",
 	}
-	d.CopyFiles(&opts, "/src", "test/image/ruby.rb", "test/image/ruby.sh")
-	if err := d.Spawn(ctx, opts, "/src/ruby.sh"); err != nil {
+
+	if err := d.Spawn(ctx, opts); err != nil {
 		t.Fatalf("docker run failed: %v", err)
 	}
 
@@ -295,26 +302,26 @@ func TestRuby(t *testing.T) {
 		t.Fatalf("docker.FindIP failed: %v", err)
 	}
 
-	// Wait until it's up and running, 'gem install' can take some time.
+	// Wait until it's up and running.
 	if err := testutil.WaitForHTTP(ip.String(), port, time.Minute); err != nil {
-		t.Fatalf("WaitForHTTP() timeout: %v", err)
+		t.Fatalf("WaitForHTTP() timeout: %v, docker logs: %v", err, dockerLogs(ctx, d))
 	}
 
 	// Ensure that content is being served.
 	url := fmt.Sprintf("http://%s:%d", ip.String(), port)
 	resp, err := http.Get(url)
 	if err != nil {
-		t.Errorf("error reaching http server: %v", err)
+		t.Errorf("error reaching http server: %v, docker logs: %v", err, dockerLogs(ctx, d))
 	}
 	if want := http.StatusOK; resp.StatusCode != want {
-		t.Errorf("wrong response code, got: %d, want: %d", resp.StatusCode, want)
+		t.Errorf("wrong response code, got: %d, want: %d, docker logs: %v", resp.StatusCode, want, dockerLogs(ctx, d))
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("error reading body: %v", err)
+		t.Fatalf("error reading body: %v, docker logs: %v", err, dockerLogs(ctx, d))
 	}
 	if got, want := string(body), "Hello World"; !strings.Contains(got, want) {
-		t.Errorf("invalid body content, got: %q, want: %q", got, want)
+		t.Errorf("invalid body content, got: %q, want: %q, docker logs: %v", got, want, dockerLogs(ctx, d))
 	}
 }
 
@@ -546,28 +553,15 @@ func startDockerdInGvisor(ctx context.Context, t *testing.T, overlay bool) *dock
 		Image:  "basic/docker",
 		CapAdd: dockerInGvisorCapabilities(),
 	}
-	if overlay {
-		opts.Mounts = []mount.Mount{
-			{
-				Target: "/var/lib/docker",
-				Type:   mount.TypeTmpfs,
-			},
-		}
+
+	var args []string
+	if !overlay {
+		args = append(args, "--no-overlay")
 	}
-	if err := d.Spawn(ctx, opts); err != nil {
+	if err := d.Spawn(ctx, opts, args...); err != nil {
 		t.Fatalf("docker run failed: %v", err)
 	}
 
-	if overlay {
-		// Docker creates tmpfs mounts with the noexec flag.
-		output, err := d.Exec(ctx,
-			dockerutil.ExecOpts{Privileged: true},
-			"mount", "-o", "remount,exec", "/var/lib/docker",
-		)
-		if err != nil {
-			t.Fatalf("docker exec failed: %v\n%s", err, output)
-		}
-	}
 	// Wait for the docker daemon.
 	for i := 0; i < 10; i++ {
 		_, err := d.Exec(ctx, dockerutil.ExecOpts{}, "docker", "info")
@@ -713,7 +707,7 @@ func testDockerComposeBuild(ctx context.Context, t *testing.T, d *dockerutil.Con
 	if opts.hostNetwork {
 		network = "host"
 	} else {
-		// TODO(b/447472587): re-enable bridge network test.
+		// TODO(https://gvisor.dev/issues/11937): re-enable bridge network test.
 		t.Skip("Skip docker compose build test with bridge network.")
 	}
 	config := dockerComposeConfig{
