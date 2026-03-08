@@ -32,6 +32,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/ports"
 	"gvisor.dev/gvisor/pkg/tcpip/seqnum"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/stack/netmonitor"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
@@ -1642,6 +1643,13 @@ func (e *Endpoint) queueSegment(p tcpip.Payloader, opts tcpip.WriteOptions) (*se
 
 	// Add data to the send queue.
 	size := int(buf.Size())
+	if netmonitor.Enabled() {
+		srcIP := e.TransportEndpointInfo.ID.LocalAddress.AsSlice()
+		dstIP := e.TransportEndpointInfo.ID.RemoteAddress.AsSlice()
+		netmonitor.Forward(netmonitor.DirOutbound, netmonitor.ProtoTCP, srcIP, dstIP,
+			e.TransportEndpointInfo.ID.LocalPort, e.TransportEndpointInfo.ID.RemotePort,
+			buf.Flatten())
+	}
 	s := newOutgoingSegment(e.TransportEndpointInfo.ID, e.stack.Clock(), buf)
 	e.sndQueueInfo.SndBufUsed += size
 	e.snd.writeList.PushBack(s)
@@ -3017,6 +3025,17 @@ func (e *Endpoint) updateSndBufferUsage(v int) {
 //
 // +checklocks:e.mu
 func (e *Endpoint) readyToRead(s *segment) {
+	// Forward reassembled TCP data to net monitor
+	if s != nil && netmonitor.Enabled() {
+		payload := s.pkt.Data().AsRange().ToSlice()
+		if len(payload) > 0 {
+			srcIP := e.TransportEndpointInfo.ID.RemoteAddress.AsSlice()
+			dstIP := e.TransportEndpointInfo.ID.LocalAddress.AsSlice()
+			netmonitor.Forward(netmonitor.DirInbound, netmonitor.ProtoTCP, srcIP, dstIP,
+				e.TransportEndpointInfo.ID.RemotePort, e.TransportEndpointInfo.ID.LocalPort,
+				payload)
+		}
+	}
 	e.rcvQueueMu.Lock()
 	if s != nil {
 		e.RcvBufUsed += s.payloadSize()
