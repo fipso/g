@@ -204,6 +204,7 @@ go_library(
         "//pkg/tcpip/ports",
         "//pkg/tcpip/seqnum",
         "//pkg/tcpip/stack",
+        "//pkg/tcpip/stack/netmonitor",
         "//pkg/tcpip/transport/raw",
         "//pkg/waiter",
         "@com_github_google_btree//:go_default_library",
