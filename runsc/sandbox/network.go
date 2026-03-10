@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
@@ -639,6 +641,23 @@ const emptyNatRules = `-P PREROUTING ACCEPT
 -P POSTROUTING ACCEPT
 `
 
+// iptablesSaveWithRetry runs an iptables-save command with retries to handle
+// xtables lock contention. iptables-save does not support -w, so we retry
+// manually when the lock is held by another process.
+func iptablesSaveWithRetry(name string, args ...string) ([]byte, error) {
+	for i := 0; i < 10; i++ {
+		out, err := exec.Command(name, args...).CombinedOutput()
+		if err == nil {
+			return out, nil
+		}
+		if !strings.Contains(string(out), "xtables lock") {
+			return out, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("%s failed after retries: xtables lock contention", name)
+}
+
 // checkNftables can return a nil file and error if it finds only
 // emptyNatRules.
 func checkNftables() (*os.File, error) {
@@ -656,14 +675,14 @@ func checkNftables() (*os.File, error) {
 	}
 
 	// Get the current (empty) legacy rules.
-	currLegacy, err := exec.Command("iptables-legacy-save", "-t", "nat").Output()
+	currLegacy, err := iptablesSaveWithRetry("iptables-legacy-save", "-t", "nat")
 	if err != nil {
-		return nil, fmt.Errorf("failed to save existing rules with error (%v) and output: %s", err, currLegacy)
+		return nil, fmt.Errorf("failed to save existing rules: %v", err)
 	}
 
 	// Restore empty legacy rules.
 	defer func() {
-		cmd := exec.Command("iptables-legacy-restore")
+		cmd := exec.Command("iptables-legacy-restore", "-w")
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			log.Warningf("failed to get stdin pipe: %v", err)
@@ -681,12 +700,12 @@ func checkNftables() (*os.File, error) {
 	}()
 
 	// Pipe the output of iptables-nft-save to iptables-legacy-restore.
-	nftOut, err := exec.Command("iptables-nft-save", "-t", "nat").Output()
+	nftOut, err := iptablesSaveWithRetry("iptables-nft-save", "-t", "nat")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run iptables-nft-save: %v", err)
 	}
 
-	cmd := exec.Command("iptables-legacy-restore")
+	cmd := exec.Command("iptables-legacy-restore", "-w")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stdin pipe: %v", err)
