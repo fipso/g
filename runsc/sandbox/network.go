@@ -646,12 +646,12 @@ func checkNftables() (*os.File, error) {
 	// gives predictable results: no counters and no comments.
 
 	// Is the legacy table empty?
-	if out, err := exec.Command("iptables-legacy", "-t", "nat", "-S").Output(); err != nil || string(out) != emptyNatRules {
+	if out, err := exec.Command("iptables-legacy", "-w", "-t", "nat", "-S").Output(); err != nil || string(out) != emptyNatRules {
 		return writeNATBlob()
 	}
 
 	// Is the nftables table empty?
-	if out, err := exec.Command("iptables-nft", "-t", "nat", "-S").Output(); err != nil || string(out) == emptyNatRules {
+	if out, err := exec.Command("iptables-nft", "-w", "-t", "nat", "-S").Output(); err != nil || string(out) == emptyNatRules {
 		return nil, nil
 	}
 
