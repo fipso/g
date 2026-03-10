@@ -16,6 +16,16 @@ New features:
     - Clones all container -> host uds traffic to a host uds socket:
         - Data is wrapped in simple struct that contains direction and size
     - Intended to be used with `--host-uds` on `all` or `open`
+- `--net-monitor=/path/to/socket.sock` flag for `runsc`:
+    - Copies all TCP/UDP traffic (inbound + outbound) to a Unix domain socket
+    - Handshake: sends `CONTAINER_ID=<id>\n` on connect
+    - Binary packet format: `[dir:1][timestamp:8][ipver:1][proto:1][srcIP:4/16][dstIP:4/16][srcPort:2][dstPort:2][len:4][payload:N]`
+    - Async forwarding with 4096-entry buffer; drops silently when full
+- xtables lock fixes in `checkNftables()`:
+    - Used with `--reproduce-nftables=true`; handles xtables lock contention
+    - `iptables-legacy` and `iptables-nft` calls use `-w` (wait for lock)
+    - `iptables-legacy-restore` calls use `-w`
+    - `iptables-legacy-save` and `iptables-nft-save` use retry logic (10 attempts, 100ms apart) since they don't support `-w`
 
 **gVisor** provides a strong layer of isolation between running applications and
 the host operating system. It is an application kernel that implements a
